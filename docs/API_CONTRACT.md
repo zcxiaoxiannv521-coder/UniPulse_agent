@@ -299,20 +299,29 @@ B **不主动推送**企微消息，也**不生成**面向用户的自然语言�
 {
   "user": { "id": "us_9f2c1a7b3d4e", "name": "小吴" },
   "generated_at": "2026-11-30T09:00:00+08:00",
-  "plan": { "id": "pl_2f3a4b5c6d7e", "version": 4, "status": "confirmed", "note": null },
-  "next_class": { "title": "机器学习", "start_at": "2026-11-30T10:00:00+08:00", "location": "教三 302" },
-  "next_deadline": { "title": "提交实验报告", "due_at": "2026-12-01T23:59:00+08:00", "remaining_minutes": 60 },
+  "today": "2026-11-30",
+  "time_mode": "demo",
+  "plan": { "id": "pl_2f3a4b5c6d7e", "goal_id": "gl_...", "version": 4,
+            "status": "confirmed", "note": null,
+            "updated_at": "2026-11-30T09:00:00+08:00" },
+  "next_class": { "title": "机器学习", "start_at": "2026-11-30T10:00:00+08:00",
+                  "end_at": "2026-11-30T11:30:00+08:00", "location": "教三 302",
+                  "session_id": "cs_..." },
+  "next_deadline": { "task_id": "tk_...", "title": "提交实验报告",
+                     "due_at": "2026-12-01T23:59:00+08:00", "remaining_minutes": 60 },
   "pending_changes": [
-    { "preview_id": "pv_4b5c6d7e8f9a", "confirm_code": "T03",
+    { "preview_id": "pv_4b5c6d7e8f9a", "confirm_code": "T03", "kind": "reschedule",
       "summary": "考试提前到 12-02，缺口 80 分钟待选择",
       "expires_at": "2026-11-30T10:42:00+08:00" }
   ],
   "days": [
     {
       "date": "2026-11-30",
+      "weekday": "周一",
       "items": [
         { "start_at": "2026-11-30T19:00:00+08:00", "end_at": "2026-11-30T20:00:00+08:00",
-          "title": "复习第三章", "item_type": "task", "status": "planned", "source": "plan" }
+          "title": "复习第三章", "item_type": "task", "status": "planned",
+          "source": "plan", "location": null, "ref_id": "pi_..." }
       ]
     }
   ],
@@ -324,6 +333,13 @@ B **不主动推送**企微消息，也**不生成**面向用户的自然语言�
   ]
 }
 ```
+
+`days[].items[].source`：`plan` 来自计划 / `course` 来自课表 / `exam` 来自考试。
+`days[].items[].status`：`planned` 待做 / `done` 已完成 / `locked` 锁定。
+`ref_id` 指向来源记录的 ID，C 需要展开详情时用它调对应接口。
+
+> **实现状态（2026-11-20）：** `services/queries.py` 的 `get_dashboard()` 已实现；
+> HTTP 接口 `/api/v1/dashboard` 尚未实现。
 
 `days[].items[].source`：`plan` 来自计划 / `course` 来自课表 / `exam` 来自考试。
 
@@ -391,17 +407,29 @@ get_context(user_id: str, date_from: str | None = None, date_to: str | None = No
   "user": { "id": "us_...", "name": "小吴", "timezone": "Asia/Shanghai" },
   "range": { "from": "2026-11-30", "to": "2026-12-06" },
   "as_of": "2026-11-30T09:00:00+08:00",
+  "time_mode": "demo",
   "data_version": { "plan_id": "pl_2f3a4b5c6d7e", "plan_version": 3 },
   "goals": [ /* Goal */ ],
   "exams": [ /* Exam */ ],
   "sessions": [ /* ClassSession */ ],
   "tasks": [ /* Task */ ],
-  "preferences": [ { "key": "daily_limit_minutes", "value": 90, "scope": "goal:gl_5e6f7a8b9c0d" } ],
+  "preferences": [ { "key": "daily_limit_minutes", "value": 90,
+                     "scope": "goal:gl_5e6f7a8b9c0d",
+                     "confirmed_at": "2026-11-20T20:50:44+08:00" } ],
+  "plan": { "id": "pl_...", "goal_id": "gl_...", "status": "confirmed",
+            "version": 3, "note": null, "updated_at": "2026-11-30T09:00:00+08:00" },
+  "plan_items": [ /* PlanItem */ ],
   "missing": [ { "field": "courses", "reason": "NO_COURSE_DATA" } ]
 }
 ```
 
-`missing` 是「数据不全」的唯一表达方式。例如用户还没录课表，`sessions` 为空且 `missing` 含 `NO_COURSE_DATA`，A 应提示补全，而不是当成「今天没课」。
+`time_mode`：当前是 `real` 还是 `demo`，方便 A 在演示时确认时间基准。
+
+`missing` 是「数据不全」的唯一表达方式。例如用户还没录课表，`sessions` 为空且 `missing` 含 `NO_CLASS_DATA_IN_RANGE`，A 应提示补全，而不是当成「今天没课」。
+
+`missing[].reason` 目前有：`NO_CLASS_DATA_IN_RANGE`、`NO_UPCOMING_EXAM`、`NO_OPEN_TASK`、`NO_CONFIRMED_PLAN`、`EMPTY_PLAN`、`NO_ACTIVE_GOAL`。
+
+> **实现状态（2026-11-20）：** `services/queries.py` 中已实现，可直接调用。
 
 ### 4.4 `record_notice`
 
@@ -812,3 +840,4 @@ V4 硬性要求：「网页校验访问者与企微用户的绑定关系，不�
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | v0.1 | 2026-11-20 | 初稿：按 V4 第 3 节定义 A/B/C 三个角色、7 个服务函数、9 个 HTTP 接口、8 个错误码 |
+| v0.2 | 2026-11-20 | 只读查询落地：`get_context` 增加 `time_mode` / `plan` / `plan_items`；`Dashboard` 增加 `today` / `time_mode` / `days[].weekday` / `items[].location` / `items[].ref_id` / `next_class.session_id`；所有时间字段统一为带时区 ISO；`missing.reason` 补全枚举 |
