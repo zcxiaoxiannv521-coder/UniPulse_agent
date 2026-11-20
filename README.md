@@ -205,9 +205,19 @@ curl "http://127.0.0.1:8000/api/v1/dashboard?token=<token>"
 
 ### Swagger 里怎么测
 
+本项目用的是自定义 `authorization` 头参数，所以 Swagger 里**没有**右上角的 Authorize 按钮，直接填参数即可：
+
 1. 启动服务后打开 <http://127.0.0.1:8000/docs>
-2. 点右上角 **Authorize**，填 `Bearer <token>`（连 `Bearer ` 一起填）
-3. 展开任意接口点 **Try it out** → **Execute**
+2. 展开任意 `/api/v1/*` 接口，点 **Try it out**
+3. 在 `authorization` 一栏填：`Bearer <token>`（`Bearer` 和 Token 之间有一个空格）
+4. `token` 一栏留空（它是给看板链接用的备选方式）
+5. 点 **Execute**，看下方的 Response body
+
+先拿 Token：
+
+```bash
+python -m api.auth --user us_demo_a
+```
 
 ---
 
