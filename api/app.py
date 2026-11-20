@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+import logging
+import re
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Query, Request
@@ -24,6 +26,30 @@ from database.connection import DB_PATH, init_db
 from services import clock, queries
 
 API_VERSION = "0.2.0"
+
+_TOKEN_IN_QUERY = re.compile(r"(token=)[^&\s\"']+")
+
+
+class RedactTokenFilter(logging.Filter):
+    """把访问日志里的 ?token=xxx 换成 ?token=<redacted>。
+
+    uvicorn 默认会把完整 URL 打进日志，看板链接的 Token 就泄露在日志文件里了。
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
+            fixed = list(args)
+            fixed[2] = _TOKEN_IN_QUERY.sub(r"\1<redacted>", fixed[2])
+            record.args = tuple(fixed)
+        return True
+
+
+def install_log_redaction() -> None:
+    """给 uvicorn 的访问日志挂上脱敏过滤器（重复调用不会重复挂）。"""
+    logger = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, RedactTokenFilter) for f in logger.filters):
+        logger.addFilter(RedactTokenFilter())
 
 
 def _error(
@@ -46,6 +72,7 @@ async def lifespan(app: FastAPI):
     """启动时建表并检查认证配置；配置不对就不对外提供服务。"""
     init_db()
     auth.ensure_configured()
+    install_log_redaction()
     yield
 
 

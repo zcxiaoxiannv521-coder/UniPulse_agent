@@ -211,3 +211,26 @@ def test_endpoints_are_read_only(client, db_path):
     after = snapshot()
 
     assert before == after
+
+
+def test_access_log_redacts_token():
+    """访问日志不能把完整 Token 打出来。"""
+    import logging
+
+    from api.app import RedactTokenFilter
+
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=("127.0.0.1", "GET", "/api/v1/dashboard?token=SECRET123&x=1", "1.1", 200),
+        exc_info=None,
+    )
+    RedactTokenFilter().filter(record)
+
+    message = record.getMessage()
+    assert "SECRET123" not in message
+    assert "token=<redacted>" in message
+    assert "x=1" in message
