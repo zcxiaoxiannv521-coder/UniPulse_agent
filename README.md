@@ -17,10 +17,11 @@
 |---|---|---|
 | 第一阶段 | 项目初始化、目录结构、Git、建库脚本、冒烟测试 | ✅ 完成 |
 | 第二阶段 | 接口契约、数据表设计、协商清单 | ✅ 完成（文档，待三方确认） |
-| 第三阶段 | 业务代码（课表/任务查询、排程、预览、确认） | ⬜ 未开始 |
+| 第三阶段 | 时间管理（`services/clock.py`）、演示数据（`demo/seed.py`） | ✅ 完成 |
+| 第三阶段续 | 查询、排程、预览与确认 | ⬜ 未开始 |
 | 第四阶段 | 企微接入（A）、看板（C）、联调 | ⬜ 未开始 |
 
-**现在仓库里没有排程算法、没有 Agent、没有企微代码。** 这是故意的——先把接口和数据格式对齐，再各写各的。
+**现在仓库里没有排程算法、没有 Agent、没有企微代码。** 这是故意的——先把时间基准、演示数据和接口对齐，再写业务逻辑。
 
 ---
 
@@ -35,10 +36,14 @@ unipulse/
 ├── database/            # B：数据库
 │   ├── connection.py    #   连接工具 + 一键建库
 │   └── schema.sql       #   12 张表的建表脚本
-├── services/            # B：业务逻辑（第三阶段开始写）
+├── services/            # B：业务逻辑
+│   └── clock.py         #   统一时间入口（real / demo 两种模式）
 ├── tests/               # B：测试
-│   └── test_smoke.py    #   冒烟测试：建库、接口、连接
+│   ├── test_smoke.py    #   冒烟测试：建库、接口、连接
+│   ├── test_clock.py    #   时间模式、时区、错误配置、跨天
+│   └── test_seed.py     #   演示数据、幂等、关联、回滚
 ├── demo/                # B：脱敏演示数据（固定 11-30 场景）
+│   └── seed.py          #   一键初始化演示数据
 ├── web/                 # C：Streamlit 个人看板
 ├── docs/
 │   ├── API_CONTRACT.md  #   ★ 接口契约：A/B/C 怎么对接
@@ -79,13 +84,15 @@ python -m pip install -r requirements.txt
 > 已经建好 `.venv` 的话，只需要每次 `source .venv/bin/activate`。
 > 团队协作的分支、提交、合并规则见 [`docs/DEVELOPMENT_GUIDE.md`](docs/DEVELOPMENT_GUIDE.md)。
 
-### 2. 建数据库
+### 2. 建数据库 + 演示数据
 
 ```bash
-python -m database.connection
+python -m database.connection     # 建表
+python -m demo.seed               # 写入演示数据（可重复执行）
 ```
 
-看到 `✅ 数据库已初始化：.../data/unipulse.db` 就成功了。
+看到 `✅ 数据库已初始化：.../data/unipulse.db` 和 `✅ 演示数据已写入：...` 就成功了。
+演示数据是 11-30 的固定场景，详见 [`demo/README.md`](demo/README.md)。
 
 ### 3. 启动后端
 
@@ -101,17 +108,56 @@ python -m uvicorn api.app:app --reload --port 8000
 ### 4. 跑测试
 
 ```bash
-pytest -q
+python -m pytest -q
 ```
 
-应看到 `3 passed`。
+应看到 `24 passed`。
 
 ### 5. 查看数据库
 
 ```bash
 sqlite3 data/unipulse.db ".tables"
-sqlite3 data/unipulse.db ".schema plans"
+sqlite3 data/unipulse.db "SELECT id, title FROM tasks;"
 ```
+
+---
+
+## 时间模式：real 与 demo
+
+演示要求「今天」固定在 2026-11-30 上午。所有业务时间都必须从 `services/clock.py` 取，**不要用 `datetime.now()`**，否则 12 月 6 日答辩时「今天」会变成真实日期，缺口全算错。
+
+| 模式 | 含义 | 什么时候用 |
+|---|---|---|
+| `real` | 真实当前时间（**默认**） | 平时开发 |
+| `demo` | 固定在 `UNIPULSE_DEMO_NOW` | 跑演示、录视频、联调固定场景 |
+
+切换方式（只影响当前终端）：
+
+```bash
+# 演示模式
+export UNIPULSE_TIME_MODE=demo
+export UNIPULSE_DEMO_NOW=2026-11-30T09:00:00+08:00
+
+# 改回真实时间
+export UNIPULSE_TIME_MODE=real
+```
+
+自查当前用的是哪种时间：
+
+```bash
+python -m services.clock
+```
+
+代码里这样用：
+
+```python
+from services.clock import get_now, get_today, get_mode
+
+now = get_now()        # 带 +08:00 时区的 datetime
+today = get_today()    # date
+```
+
+配置写错（模式拼错、时间不带时区、时区名不存在）会直接抛 `ClockConfigError`，不会悄悄退回真实时间。
 
 ---
 

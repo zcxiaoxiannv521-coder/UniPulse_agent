@@ -220,6 +220,37 @@ curl http://127.0.0.1:8000/health
 
 ---
 
+### 3.1 演示模式与演示数据（演示前必看）
+
+演示要求「今天」固定为 2026-11-30。时间由 `services/clock.py` 统一提供，切换靠环境变量：
+
+```bash
+export UNIPULSE_TIME_MODE=demo
+export UNIPULSE_DEMO_NOW=2026-11-30T09:00:00+08:00
+
+python -m services.clock          # 自查：应显示 mode=demo、2026-11-30T09:00:00+08:00
+```
+
+写入演示数据（幂等，可重复执行）：
+
+```bash
+python -m demo.seed
+```
+
+只想重来（会丢弃对演示数据的修改）：
+
+```bash
+python -m demo.seed --reset
+```
+
+**三条纪律：**
+
+1. 业务代码取时间一律用 `from services.clock import get_now`，不要写 `datetime.now()`
+2. 演示时间只放在环境变量里，不能写进 Python 代码
+3. 配置写错会报 `ClockConfigError`，这是故意的——不要改成"出错就用真实时间"
+
+---
+
 ## 4. 运行测试
 
 ```bash
