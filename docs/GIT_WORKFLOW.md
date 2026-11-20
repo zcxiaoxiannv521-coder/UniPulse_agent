@@ -9,7 +9,7 @@
 
 | 项 | 值 |
 |---|---|
-| 地址 | `https://github.com/t8z7b7655b-svg/UniPulse`（**私有**，已验证可推送） |
+| 地址 | `https://github.com/t8z7b7655b-svg/UniPulse`（**私有**，需登录 GitHub 账号才能访问） |
 | 主分支 | `main`，任何时候都应该能跑起来 |
 | 本地目录 | 每个人自己电脑上的 `unipulse/` |
 
