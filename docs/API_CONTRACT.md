@@ -581,6 +581,14 @@ python -m uvicorn api.app:app --host 0.0.0.0 --port 8000
 - 接口文档：`http://127.0.0.1:8000/docs`（FastAPI 自动生成，C 可直接对照调试）
 - 手机访问需要把 `127.0.0.1` 换成电脑局域网 IP（例如 `http://192.168.1.10:8000`），⚠️待确认
 
+C 的看板在 `web/app.py`，单独启动：
+
+```bash
+streamlit run web/app.py
+```
+
+看板通过 HTTP 调用上面的后端，**不直接连数据库**。
+
 ### 5.2 认证：链接里的 token
 
 V4 明确要求「不能凭链接里的用户编号读取数据」。所以：
@@ -791,7 +799,7 @@ V4 硬性要求：「网页校验访问者与企微用户的绑定关系，不�
 - ⚠️ A 是否同意「同进程 import」而不是 HTTP 调用 B
 - ⚠️ 解析字段（3.1 节的 `candidate`）由 B 定义、A 填充，A 是否接受
 - ⚠️ `confirm_code` 由 B 生成、A 只回显，A 是否接受
-- ⚠️ C 的 Streamlit 是走 HTTP 还是同进程 import
+- ⚠️ C 的 Streamlit 是走 HTTP 还是同进程 import（目录已定 `web/`，方式待 C 确认）
 - ⚠️ token 放 query 参数是否满足手机端与安全要求
 - ⚠️ 课表是「具体日期」还是「每周重复 + 例外」，直接影响 `class_sessions` 表
 

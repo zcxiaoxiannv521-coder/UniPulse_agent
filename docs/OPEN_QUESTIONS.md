@@ -115,12 +115,19 @@ V4 要求「未确认的调整单独标记，不混进正式安排」。
 
 **注意：** 本机 Python 是 3.14，部分库可能还没适配。B 已实测 FastAPI 0.165 + Pydantic 2.13 + pytest 9 在 3.14 下正常。
 
-### T2. 目录结构对不齐
+### T2. 目录结构 —— ✅ 已定（2026-11-20）
 
-V4 建议的目录是 `main.py` / `app.py` / `agent/` / `integrations/`；你给我的第一阶段要求是 `database/` `services/` `api/` `tests/` `demo/` `docs/`。
+按团队确认的截图执行：
 
-- **B 的处理：** 以你的要求为准（`api/app.py` 作为 FastAPI 入口），**不**自动创建 `agent/` 和 `integrations/`——那两块归 A，避免占位目录让 A 误以为已有实现。
-- **待确认：** A 是否需要在仓库里新建 `agent/`、`integrations/`；C 的 Streamlit 文件叫 `web/app.py` 还是根目录 `app.py`（后者容易和 FastAPI 入口混淆）。
+| 成员 | 主要开发目录 |
+|---|---|
+| A | `agent/`、`integrations/` |
+| B | `database/`、`services/`、`api/` |
+| C | `web/`、页面相关文件 |
+
+V4 建议的 `main.py` 由 `api/app.py` 承担（FastAPI 入口）；V4 建议的根目录 `app.py` 由 `web/app.py` 承担（Streamlit 看板），避免两个 `app.py` 混淆。
+
+仓库里已建好三个空目录并各带一份 README 说明用途，**里面没有实现代码**，由对应成员自己填。
 
 ### T3. 时间与日期格式
 

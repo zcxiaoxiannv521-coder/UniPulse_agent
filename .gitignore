@@ -26,3 +26,6 @@ data/*.sqlite3
 
 # 临时草稿
 .inbox/
+
+# Streamlit 本地密钥（可能有真实凭据）
+.streamlit/secrets.toml

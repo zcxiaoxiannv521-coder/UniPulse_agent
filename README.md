@@ -28,15 +28,18 @@
 
 ```
 unipulse/
-├── api/                 # HTTP 接口层（供 C 的网页调用）
+├── agent/               # A：意图判断、工具调度、运行状态
+├── integrations/        # A：企微接入、消息去重、身份注入
+├── api/                 # B：HTTP 接口层（供 C 的网页调用）
 │   └── app.py           #   FastAPI 入口，目前只有 /health
-├── database/            # 数据库
+├── database/            # B：数据库
 │   ├── connection.py    #   连接工具 + 一键建库
 │   └── schema.sql       #   12 张表的建表脚本
-├── services/            # 业务逻辑（B 的主要工作区，第二阶段开始写）
-├── tests/               # 测试
+├── services/            # B：业务逻辑（第三阶段开始写）
+├── tests/               # B：测试
 │   └── test_smoke.py    #   冒烟测试：建库、接口、连接
-├── demo/                # 脱敏演示数据（固定 11-30 场景）
+├── demo/                # B：脱敏演示数据（固定 11-30 场景）
+├── web/                 # C：Streamlit 个人看板
 ├── docs/
 │   ├── API_CONTRACT.md  #   ★ 接口契约：A/B/C 怎么对接
 │   ├── DATA_SCHEMA.md   #   ★ 数据表设计
@@ -47,7 +50,7 @@ unipulse/
 └── README.md
 ```
 
-**还没建 `agent/` 和 `integrations/`**：这两块归 A，等 A 开工时自己建，避免出现空目录让人误以为已有实现。
+`agent/`、`integrations/`、`web/` 现在只有 README，**空目录占位是为了让三个人一拉代码就知道自己该在哪干活**，里面没有实现代码。
 
 ---
 
@@ -102,11 +105,13 @@ sqlite3 data/unipulse.db ".schema plans"
 
 ## 三人分工（V4 第 4 节）
 
-| 成员 | 负责 | 本仓库对应的目录 |
+| 成员 | 负责 | 主要开发目录 |
 |---|---|---|
-| **A：企微与 Agent** | 私聊收发、意图判断、工具选择、确认回复、计划表链接 | `agent/`、`integrations/`（A 自己建） |
-| **B：数据与执行**（我） | 课表/任务/目标、规则排程、预览、版本确认、提醒队列 | `database/`、`services/`、`api/`、`tests/`、`demo/` |
-| **C：网页与演示** | 手机看板、通知证据与前后差异、脱敏样例、验收答辩 | Streamlit 文件（目录待定，见 OPEN_QUESTIONS C1/T2） |
+| **A：企微与 Agent** | 私聊收发、意图判断、工具选择、确认回复、计划表链接 | `agent/`、`integrations/` |
+| **B：数据与执行**（我） | 课表/任务/目标、规则排程、预览、版本确认、提醒队列 | `database/`、`services/`、`api/` |
+| **C：网页与演示** | 手机看板、通知证据与前后差异、脱敏样例、验收答辩 | `web/`、页面相关文件 |
+
+> 目录归属约定：A 只改 `agent/`、`integrations/`；B 只改 `database/`、`services/`、`api/`、`tests/`、`demo/`；C 只改 `web/`。跨目录改动先在群里说一声，避免两个人同时改一个文件。
 
 ---
 
