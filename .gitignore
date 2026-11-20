@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# 虚拟环境（依赖用 requirements.txt 重建，不入库）
+.venv/
+venv/
+
+# 本地数据库（数据可由 schema.sql 重建，不入库）
+data/*.db
+data/*.db-journal
+data/*.sqlite3
+
+# 环境变量与密钥（严禁提交）
+.env
+.env.local
+
+# 系统与编辑器
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# 临时草稿
+.inbox/

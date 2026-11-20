@@ -1,0 +1,9 @@
+# UniPulse 后端依赖（成员 B 维护）
+# 安装：pip install -r requirements.txt
+
+fastapi==0.165.0          # Web 接口框架
+uvicorn[standard]==0.40.0 # 启动服务的服务器
+pytest==9.0.3             # 单元测试
+httpx==0.28.1             # 测试里调用接口用
+
+# 说明：数据库使用 Python 自带的 sqlite3，不需要安装额外驱动。
