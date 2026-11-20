@@ -144,17 +144,29 @@ V4 建议的 `main.py` 由 `api/app.py` 承担（FastAPI 入口）；V4 建议�
 - 内部 `users.id`（`us_` 前缀）是主键；企微 `wecom_userid` 只是绑定字段。
 - **待确认：** 演示时用几个测试用户、企微测试账号与内部 ID 怎么对应。
 
-### T6. 演示数据与「固定今天」
+### T6. 演示数据与「固定今天」 —— ✅ 已实现（2026-11-20）
 
 V4 要求固定 2026-11-30 上午。程序不能直接读系统时间，否则过几天演示就崩。
 
-- **B 的建议：** 增加一个可配置的「当前时间」入口（环境变量或 `demo/seed.py` 写入），业务代码统一从 `services/clock.py` 取时间。
-- **待确认：** 团队是否接受这个做法（这是**必须**解决的，否则 12/6 演示时「今天」已经不是 11/30）。
+**实现方式：** `services/clock.py` 用环境变量控制两种模式：
 
-### T7. 分支与提交规范
+| 变量 | 值 | 说明 |
+|---|---|---|
+| `UNIPULSE_TIME_MODE` | `real`（默认）/ `demo` | 用真实时间还是固定时间 |
+| `UNIPULSE_DEMO_NOW` | `2026-11-30T09:00:00+08:00` | 仅 demo 模式使用，必须带时区 |
+| `UNIPULSE_TIMEZONE` | `Asia/Shanghai` | 统一时区 |
 
-- **B 的建议：** `main` 保持可运行；每人一条分支（`feat/a-*`、`feat/b-*`、`feat/c-*`）；合并前跑 `pytest`。
-- **待确认：** 是否需要 PR 流程（3 人小团队可以直接合并，但要约定谁合并）。
+业务代码统一调用 `from services.clock import get_now, get_today`，禁止 `datetime.now()`。
+配置错误会抛 `ClockConfigError`，不会静默回退。
+演示数据由 `python -m demo.seed` 写入。
+
+- **剩余待确认：** 团队是否接受"用环境变量而不是配置文件"（B 已按此实现，改起来成本低）。
+
+### T7. 分支与提交规范 —— ✅ 已定（2026-11-20）
+
+- `main` 稳定版；`dev` 日常整合；三人各一条 `feature/agent`、`feature/backend`、`feature/web`
+- 日常先合到 `dev`，里程碑才由 B 合到 `main`；合并前跑 `pytest`
+- 完整流程见 `docs/DEVELOPMENT_GUIDE.md`
 
 ### T8. 密钥与隐私
 
