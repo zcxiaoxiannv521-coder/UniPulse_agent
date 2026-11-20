@@ -1,0 +1,207 @@
+{
+  "version": 1,
+  "demo_now": "2026-11-30T09:40:00+08:00",
+  "profile": {
+    "display_name": "林同学",
+    "timezone": "Asia/Shanghai"
+  },
+  "goals": [
+    {
+      "id": "goal_ml",
+      "title": "准备机器学习期末考试",
+      "event_id": "exam_ml",
+      "daily_max_minutes": 90,
+      "scope": "第三章、第四章（必做）；附加模拟练习（选做）",
+      "availability": "只开放：11月30日19:00–20:00、12月1日19:00–20:30、12月2日15:00–16:20；每日最多90分钟，其他空白不视为空闲。",
+      "status": "active",
+      "version": 1
+    }
+  ],
+  "events": [
+    {
+      "id": "exam_ml",
+      "title": "机器学习期末考试",
+      "start_at": "2026-12-04T14:00:00+08:00",
+      "location": "A101",
+      "version": 1,
+      "source": "已校对的示例考试通知",
+      "source_notice_id": "n_original"
+    }
+  ],
+  "classes": [
+    {
+      "id": "c1",
+      "course": "高等数学",
+      "start_at": "2026-11-30T08:00:00+08:00",
+      "end_at": "2026-11-30T09:35:00+08:00",
+      "location": "B205"
+    },
+    {
+      "id": "c2",
+      "course": "机器学习",
+      "start_at": "2026-11-30T14:00:00+08:00",
+      "end_at": "2026-11-30T15:35:00+08:00",
+      "location": "A101"
+    },
+    {
+      "id": "c3",
+      "course": "大学英语",
+      "start_at": "2026-12-01T10:00:00+08:00",
+      "end_at": "2026-12-01T11:35:00+08:00",
+      "location": "C302"
+    },
+    {
+      "id": "c4",
+      "course": "高等数学",
+      "start_at": "2026-12-02T10:00:00+08:00",
+      "end_at": "2026-12-02T11:35:00+08:00",
+      "location": "B205"
+    },
+    {
+      "id": "c5",
+      "course": "机器学习",
+      "start_at": "2026-12-03T16:00:00+08:00",
+      "end_at": "2026-12-03T17:35:00+08:00",
+      "location": "A101"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "t1",
+      "goal_id": "goal_ml",
+      "title": "复习第三章并完成练习",
+      "remaining_minutes": 60,
+      "status": "todo",
+      "version": 1,
+      "actual_minutes": 0,
+      "required": true,
+      "included": true
+    },
+    {
+      "id": "t2",
+      "goal_id": "goal_ml",
+      "title": "复习第四章与整理错题",
+      "remaining_minutes": 90,
+      "status": "todo",
+      "version": 1,
+      "actual_minutes": 0,
+      "required": true,
+      "included": true
+    },
+    {
+      "id": "t3",
+      "goal_id": "goal_ml",
+      "title": "整理复习范围与课程资料",
+      "remaining_minutes": 0,
+      "status": "done",
+      "version": 1,
+      "actual_minutes": 20,
+      "required": true,
+      "included": true
+    },
+    {
+      "id": "t4",
+      "goal_id": "goal_ml",
+      "title": "附加模拟练习",
+      "remaining_minutes": 80,
+      "status": "todo",
+      "version": 1,
+      "actual_minutes": 0,
+      "required": false,
+      "included": true
+    }
+  ],
+  "study_blocks": [
+    {
+      "id": "b1",
+      "task_id": "t1",
+      "plan_id": "plan_ml",
+      "plan_version": 1,
+      "start_at": "2026-11-30T19:00:00+08:00",
+      "end_at": "2026-11-30T20:00:00+08:00",
+      "status": "confirmed"
+    },
+    {
+      "id": "b2",
+      "task_id": "t2",
+      "plan_id": "plan_ml",
+      "plan_version": 1,
+      "start_at": "2026-12-01T19:00:00+08:00",
+      "end_at": "2026-12-01T20:30:00+08:00",
+      "status": "confirmed"
+    },
+    {
+      "id": "b3",
+      "task_id": "t4",
+      "plan_id": "plan_ml",
+      "plan_version": 1,
+      "start_at": "2026-12-02T15:00:00+08:00",
+      "end_at": "2026-12-02T16:20:00+08:00",
+      "status": "confirmed"
+    }
+  ],
+  "reminders": [
+    {
+      "id": "r1",
+      "event_id": "exam_ml",
+      "at": "2026-12-03T14:00:00+08:00",
+      "status": "pending"
+    }
+  ],
+  "notices": [
+    {
+      "id": "n_original",
+      "text": "【脱敏样例·原考试通知】机器学习期末考试：12月4日14:00，A101，复习第三章、第四章，附加模拟练习选做。",
+      "status": "已核对",
+      "channel": "脱敏样例",
+      "received_at": "2026-11-29T09:00:00+08:00",
+      "published_at": "2026-11-29T08:30:00+08:00"
+    },
+    {
+      "id": "n_change",
+      "text": "【脱敏样例·改期通知】机器学习期末考试提前至12月2日14:00，复习范围不变。",
+      "status": "待确认",
+      "channel": "脱敏样例",
+      "received_at": "2026-11-30T09:30:00+08:00",
+      "published_at": "2026-11-30T09:00:00+08:00"
+    }
+  ],
+  "pending": [],
+  "activity": [],
+  "preferences": {
+    "quiet_start": "22:30",
+    "quiet_end": "08:00",
+    "followup": false
+  },
+  "schema_version": 2,
+  "availability": [
+    {
+      "id": "a1",
+      "start_at": "2026-11-30T19:00:00+08:00",
+      "end_at": "2026-11-30T20:00:00+08:00"
+    },
+    {
+      "id": "a2",
+      "start_at": "2026-12-01T19:00:00+08:00",
+      "end_at": "2026-12-01T20:30:00+08:00"
+    },
+    {
+      "id": "a3",
+      "start_at": "2026-12-02T15:00:00+08:00",
+      "end_at": "2026-12-02T16:20:00+08:00"
+    }
+  ],
+  "plans": [
+    {
+      "id": "plan_ml",
+      "goal_id": "goal_ml",
+      "version": 1,
+      "status": "confirmed",
+      "event_version": 1,
+      "source_notice_ids": [
+        "n_original"
+      ],
+      "summary": "人工准备的已确认参考计划；不是本版本调用模型或排程器的结果。"
+    }
+  ]
+}
