@@ -1,0 +1,6 @@
+# C（网页看板）的额外依赖
+# 安装：pip install -r requirements-web.txt
+
+-r requirements.txt
+
+streamlit==1.67.0    # 个人看板（V4 指定）

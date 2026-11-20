@@ -1,138 +1,74 @@
-# Git 协作说明
+# Git 速查卡
 
-> 三个人一起改一个仓库，最容易出事的是「两个人改同一个文件」和「把密钥提交上去」。
-> 这份文档只讲这两件事和日常操作，5 分钟能看完。
+> 完整流程（环境、分支、提交、合并、冲突）见 [`DEVELOPMENT_GUIDE.md`](DEVELOPMENT_GUIDE.md)。
+> 这份只做速查，两处不一致时**以 DEVELOPMENT_GUIDE 为准**。
 
 ---
 
-## 1. 仓库信息
+## 仓库信息
 
 | 项 | 值 |
 |---|---|
-| 地址 | `https://github.com/zcxiaoxiannv521-coder/UniPulse_agent`（**公开**，队友无需邀请即可 clone） |
-| 主分支 | `main`，任何时候都应该能跑起来 |
-| 本地目录 | 每个人自己电脑上的 `unipulse/` |
+| 地址 | `https://github.com/zcxiaoxiannv521-coder/UniPulse_agent`（**公开**，直接 clone，无需邀请） |
+| 克隆后的文件夹 | `UniPulse_agent` |
 
 ---
 
-## 2. 队友第一次接入
+## 分支对照
 
-1. 仓库主人在 GitHub 页面点 **Settings → Collaborators → Add people**，输入队友的 GitHub 用户名
-2. 队友在邮箱里点接受邀请
-3. 队友在终端执行：
-
-```bash
-git clone https://github.com/zcxiaoxiannv521-coder/UniPulse_agent.git
-cd unipulse
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python -m database.connection
-pytest -q
-```
-
-看到 `3 passed` 就说明环境没问题。
-
----
-
-## 3. 分支怎么用
-
-| 谁 | 分支名 | 改哪里 |
+| 分支 | 用途 | 谁合并 |
 |---|---|---|
-| A | `feat/a-wecom` | `agent/`、`integrations/` |
-| B | `feat/b-data` | `database/`、`services/`、`api/`、`tests/`、`demo/` |
-| C | `feat/c-web` | `web/` |
-
-日常流程：
-
-```bash
-git checkout main
-git pull                      # 先同步别人的改动
-git checkout -b feat/b-data   # 第一次建分支，之后不用再建
-# ……写代码……
-git add -A
-git commit -m "feat: 实现七天排程与缺口计算"
-git push -u origin feat/b-data
-```
-
-**每天晚上**把分支合并回 `main`（三个人都在 `main` 上工作，冲突早发现早解决）：
-
-```bash
-git checkout main
-git pull
-git merge feat/b-data
-git push
-```
-
-3 人小团队可以不用 Pull Request，但**合并前必须在群里说一声**，避免同时往 `main` 推。
+| `main` | 稳定版，演示/提交用 | B，只在里程碑 |
+| `dev` | 日常整合 | 三个人每天合一次 |
+| `feature/agent` | A：企微与 Agent | A |
+| `feature/backend` | B：数据与执行 | B |
+| `feature/web` | C：网页看板 | C |
 
 ---
 
-## 4. 提交信息怎么写
+## 每天三步
 
-一句话说清「做了什么」，中文即可：
-
+```bash
+git checkout feature/backend
+git fetch origin && git merge origin/dev     # 先吸收别人的改动
+python -m pytest -q                          # 提交前必须全绿
+git add -A && git commit -m "feat: 做了什么"
+git push -u origin feature/backend
 ```
-feat: 实现七天排程与缺口计算
-fix: 修复过期预览仍能确认的问题
-docs: 补充确认流程时序
-chore: 初始化项目骨架
-```
 
-前缀：`feat` 新功能 / `fix` 修 bug / `docs` 文档 / `test` 测试 / `chore` 杂项。
+合并回 `dev`：
+
+```bash
+git checkout dev && git pull origin dev
+git merge --no-ff feature/backend
+python -m pytest -q && git push origin dev
+```
 
 ---
 
-## 5. 绝对不能提交的东西
+## 三条铁律
 
-| 文件 | 原因 |
+1. **不直接改 `main`**
+2. **不提交密钥**（`.env`、token、企微 Secret）
+3. **不 `git push -f`**
+
+---
+
+## 提交前检查
+
+- [ ] `git status` 里没有 `.env` / `data/*.db` / `.venv`
+- [ ] `python -m pytest -q` 全绿
+- [ ] 提交信息能看懂（`feat:` / `fix:` / `docs:` / `test:` / `chore:`）
+
+---
+
+## 危险操作清单（做了会很难救）
+
+| 命令 | 后果 |
 |---|---|
-| `.env` | 含企微机器人密钥 |
-| `data/*.db` | 本地数据库，队友自己建 |
-| `.venv/` | 虚拟环境，几百 MB |
-| `.streamlit/secrets.toml` | 可能含真实凭据 |
-| 真实学生姓名、完整聊天记录 | 隐私 |
+| `git push -f` | 覆盖别人的提交 |
+| `git reset --hard` | 丢掉本地未提交的改动 |
+| `git clean -fd` | 删掉所有未跟踪文件 |
+| `git checkout <文件>` | 丢掉该文件的本地修改 |
 
-`.gitignore` 已经覆盖了这些。**提交前扫一眼 `git status`**，确认没有红色告警里的敏感文件。
-
-如果不小心提交了密钥：立刻去企微后台重置密钥，然后告诉我，不要只删文件了事（历史记录里还在）。
-
----
-
-## 6. 冲突了怎么办
-
-```bash
-git pull
-# 提示 CONFLICT，打开冲突文件，会看到 <<<<<<< ======= >>>>>>>
-# 改成你想要的样子，删掉这些标记
-git add <冲突文件>
-git commit
-```
-
-**不要**用 `git push -f` 覆盖别人的提交。真搞不定就在群里喊，别硬来。
-
----
-
-## 7. 演示前的检查
-
-```bash
-git checkout main
-git pull
-pytest -q
-python -m database.connection
-python -m uvicorn api.app:app --port 8000
-```
-
-全过了再打标签，方便回滚：
-
-```bash
-git tag demo-v1
-git push --tags
-```
-
----
-
-## 8. 每天 21:00 联调
-
-用同一套数据跑三条链路，记录「今天通了什么、卡在哪」。
-数据由 B 的 `python -m demo.seed --reset` 重置，C 只读不改，避免两个人同时改数据把演示搞坏。
+真要用，先 `git stash` 或先在群里问一句。

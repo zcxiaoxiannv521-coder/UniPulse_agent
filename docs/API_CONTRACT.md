@@ -139,6 +139,8 @@ B **不主动推送**企微消息，也**不生成**面向用户的自然语言�
 
 `status`：`normal` 正常 / `moved` 已调课 / `cancelled` 已停课。
 
+> `course_name` 是后端从 `courses` 表联查带出的**显示字段**，`class_sessions` 表本身不存它（见 `DATA_SCHEMA.md` 3.4 节）。下面的 `Exam` 同理。
+
 > 调课**只改这一条** `class_sessions`，不动每周课表。这是 V4 的硬要求。
 
 ### 3.3 `Exam`

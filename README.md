@@ -43,7 +43,9 @@ unipulse/
 ├── docs/
 │   ├── API_CONTRACT.md  #   ★ 接口契约：A/B/C 怎么对接
 │   ├── DATA_SCHEMA.md   #   ★ 数据表设计
-│   ├── GIT_WORKFLOW.md  #   ★ 分支、提交、加队友的协作规则
+│   ├── DEVELOPMENT_GUIDE.md # ★ 协作流程：环境、分支、提交、合并、冲突
+│   ├── INTERFACE_REVIEW.md  # ★ 给 A / C 的接口审核说明
+│   ├── GIT_WORKFLOW.md  #   分支与安全速查（详见 DEVELOPMENT_GUIDE）
 │   └── OPEN_QUESTIONS.md#   ★ 待三方确认的问题
 ├── data/                # SQLite 数据库文件（不入库）
 ├── requirements.txt
@@ -57,16 +59,25 @@ unipulse/
 
 ## 快速开始
 
-### 1. 进入项目、建虚拟环境
+### 0. 克隆仓库
 
 ```bash
-cd unipulse
+git clone https://github.com/zcxiaoxiannv521-coder/UniPulse_agent.git
+cd UniPulse_agent
+```
+
+> 克隆下来的文件夹叫 `UniPulse_agent`，不是 `unipulse`。后面所有命令都在这个文件夹里执行。
+
+### 1. 建虚拟环境并装依赖
+
+```bash
 python3 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 > 已经建好 `.venv` 的话，只需要每次 `source .venv/bin/activate`。
+> 团队协作的分支、提交、合并规则见 [`docs/DEVELOPMENT_GUIDE.md`](docs/DEVELOPMENT_GUIDE.md)。
 
 ### 2. 建数据库
 

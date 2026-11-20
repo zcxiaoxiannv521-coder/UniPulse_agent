@@ -5,9 +5,9 @@
 ## 启动
 
 ```bash
-cd unipulse
+cd UniPulse_agent            # 克隆下来的文件夹
 source .venv/bin/activate
-pip install streamlit          # 依赖由 C 自己加进 requirements.txt
+python -m pip install -r requirements-web.txt    # 比 requirements.txt 多一个 streamlit
 streamlit run web/app.py
 ```
 
