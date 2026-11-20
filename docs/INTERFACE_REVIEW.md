@@ -13,7 +13,8 @@
 |---|---|---|
 | `GET /health` | ✅ 已实现 | 能 |
 | `GET /docs` | ✅ 已实现（FastAPI 自动生成） | 能 |
-| 其余 8 个 HTTP 接口 | 📝 只有契约，没有代码 | **不能**，调用会 404 |
+| 看板 5 个只读接口 | ✅ 已实现（需 Token） | 能，见 2.1 |
+| `/previews/{id}`、`/previews/{id}/confirm`、`/notifications/{id}` | 📝 只有契约 | **不能**，调用会 404 |
 | A 要调的 7 个 Python 函数 | 🟡 已实现 2 个（`get_context`、`get_dashboard`），其余 5 个待实现 | 这 2 个能用了，其余不行 |
 
 **这意味着：** A 和 C 现在可以先照契约搭骨架、写界面、定数据结构，但**别指望能跑通**。第三阶段 B 才会把这些填上。
@@ -118,11 +119,11 @@ token = create_dashboard_token(user_id)      ← B 提供，签发短链
 | 方法 | 路径 | 用途 | 状态 |
 |---|---|---|---|
 | GET | `/health` | 探活，页面右上角显示「后端正常/离线」 | ✅ 已实现 |
-| GET | `/api/v1/dashboard` | **主接口**，一次拿全看板数据 | ❌ 未实现 |
-| GET | `/api/v1/courses?date_from&date_to` | 单独查课表 | ❌ 未实现 |
-| GET | `/api/v1/exams` | 单独查考试 | ❌ 未实现 |
-| GET | `/api/v1/tasks?status=` | 单独查待办 | ❌ 未实现 |
-| GET | `/api/v1/plans/current` | 当前正式计划（含时间块） | ❌ 未实现 |
+| GET | `/api/v1/dashboard` | **主接口**，一次拿全看板数据 | ✅ 已实现 |
+| GET | `/api/v1/courses?date_from&date_to` | 单独查课表 | ✅ 已实现 |
+| GET | `/api/v1/exams` | 单独查考试 | ✅ 已实现 |
+| GET | `/api/v1/tasks?status=` | 单独查待办 | ✅ 已实现 |
+| GET | `/api/v1/plans/current` | 当前正式计划（含时间块） | ✅ 已实现 |
 | GET | `/api/v1/previews/{preview_id}` | 某个待确认草稿的前后差异 | ❌ 未实现 |
 | POST | `/api/v1/previews/{preview_id}/confirm` | 网页备用确认入口 | ❌ 未实现 |
 | GET | `/api/v1/notifications/{id}` | 通知原文与来源 | ❌ 未实现 |
@@ -167,6 +168,12 @@ token = st.query_params.get("token", "")
 
 ```python
 httpx.get(f"{API_BASE}/api/v1/dashboard", params={"token": token})
+```
+
+Token 由成员 B 签发，演示环境这样拿：
+
+```bash
+python -m api.auth --user us_demo_a     # 输出一个 2 小时有效的 Token
 ```
 
 三条规则：

@@ -249,6 +249,34 @@ python -m demo.seed --reset
 2. 演示时间只放在环境变量里，不能写进 Python 代码
 3. 配置写错会报 `ClockConfigError`，这是故意的——不要改成"出错就用真实时间"
 
+### 3.2 认证与 Token（调接口前必看）
+
+所有 `/api/v1/*` 接口都要 Token。演示环境这样拿：
+
+```bash
+python -m api.auth --status          # 看当前模式
+python -m api.auth --user us_demo_a  # 签发 2 小时有效的 Token
+```
+
+用法二选一：
+
+```bash
+# 请求头
+curl -H "Authorization: Bearer <token>" http://127.0.0.1:8000/api/v1/dashboard
+
+# 查询参数（看板链接）
+curl "http://127.0.0.1:8000/api/v1/dashboard?token=<token>"
+```
+
+两种模式：
+
+| 模式 | 何时用 | 密钥 |
+|---|---|---|
+| `demo`（默认） | 本地开发、演示 | 内置演示密钥，免配置 |
+| `production` | 正式部署 | 必须设 `UNIPULSE_TOKEN_SECRET`（≥32 位），否则启动失败 |
+
+**不要**把 `user_id` 传给接口——身份只从 Token 里取。
+
 ---
 
 ## 4. 运行测试

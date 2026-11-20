@@ -556,3 +556,71 @@ def get_dashboard(user_id: str, *, conn: sqlite3.Connection | None = None) -> di
         "exams": exams,
         "notices": notices,
     }
+
+
+# ---------------------------------------------------------------- 针对看板的细分查询
+# 下面四个函数供 HTTP 层直接使用，避免在 api/app.py 里重复写 SQL。
+TASK_STATUSES = ("todo", "doing", "done")
+
+
+def get_courses(
+    user_id: str,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> dict:
+    """某用户日期范围内的课表。默认今天起 7 天。"""
+    today = clock.get_today()
+    start = _parse_date(date_from, "date_from") if date_from else today
+    end = (
+        _parse_date(date_to, "date_to")
+        if date_to
+        else start + timedelta(days=DEFAULT_RANGE_DAYS - 1)
+    )
+    if end < start:
+        raise QueryError(f"date_to({end}) 不能早于 date_from({start})")
+
+    with _connection(conn) as db:
+        _load_user(db, user_id)
+        items = _sessions(db, user_id, start, end)
+
+    return {"date_from": start.isoformat(), "date_to": end.isoformat(), "items": items}
+
+
+def get_exams(user_id: str, *, conn: sqlite3.Connection | None = None) -> dict:
+    """今天及以后的考试，按时间正序。"""
+    with _connection(conn) as db:
+        _load_user(db, user_id)
+        items = _exams(db, user_id, clock.get_today())
+    return {"items": items}
+
+
+def get_tasks(
+    user_id: str,
+    status: str | None = None,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> dict:
+    """待办列表。status 可选 todo / doing / done，不传返回全部。"""
+    if status is not None and status not in TASK_STATUSES:
+        raise QueryError(
+            f"status={status!r} 无效，只能是 {'、'.join(TASK_STATUSES)} 或省略"
+        )
+
+    with _connection(conn) as db:
+        _load_user(db, user_id)
+        items = _tasks(db, user_id, include_done=True)
+        if status is not None:
+            items = [item for item in items if item["status"] == status]
+
+    return {"items": items}
+
+
+def get_current_plan(user_id: str, *, conn: sqlite3.Connection | None = None) -> dict:
+    """当前正式计划（含时间块）。没有正式计划时 plan 为 null。"""
+    with _connection(conn) as db:
+        _load_user(db, user_id)
+        plan = _latest_confirmed_plan(db, user_id)
+        items = _plan_items(db, user_id, plan["id"]) if plan else []
+    return {"plan": _plan_summary(plan), "items": items}

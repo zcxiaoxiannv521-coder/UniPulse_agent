@@ -17,11 +17,12 @@
 |---|---|---|
 | 第一阶段 | 项目初始化、目录结构、Git、建库脚本、冒烟测试 | ✅ 完成 |
 | 第二阶段 | 接口契约、数据表设计、协商清单 | ✅ 完成（文档，待三方确认） |
-| 第三阶段 | 时间管理（`services/clock.py`）、演示数据（`demo/seed.py`） | ✅ 完成 |
-| 第三阶段续 | 查询、排程、预览与确认 | ⬜ 未开始 |
+| 第三阶段 | 时间管理（`services/clock.py`）、演示数据（`demo/seed.py`）、只读查询（`services/queries.py`） | ✅ 完成 |
+| 第三阶段·接口 | 认证（`api/auth.py`）+ 5 个只读 HTTP 接口 | ✅ 完成 |
+| 第三阶段·待做 | 排程、预览与确认 | ⬜ 未开始 |
 | 第四阶段 | 企微接入（A）、看板（C）、联调 | ⬜ 未开始 |
 
-**现在仓库里没有排程算法、没有 Agent、没有企微代码。** 这是故意的——先把时间基准、演示数据和接口对齐，再写业务逻辑。
+**现在仓库里没有排程算法、没有 Agent、没有企微代码。** 这是故意的——先把时间基准、演示数据、只读接口对齐，再写会改数据的逻辑。
 
 ---
 
@@ -158,6 +159,55 @@ today = get_today()    # date
 ```
 
 配置写错（模式拼错、时间不带时区、时区名不存在）会直接抛 `ClockConfigError`，不会悄悄退回真实时间。
+
+---
+
+## 接口与认证
+
+### 两种认证模式
+
+| 模式 | 触发方式 | 说明 |
+|---|---|---|
+| `demo` | 默认 | 用固定的演示密钥，可直接签发 Token，适合本地开发和演示 |
+| `production` | `UNIPULSE_AUTH_MODE=production` | 必须设置 `UNIPULSE_TOKEN_SECRET`（≥32 位），否则服务**启动失败** |
+
+演示模式签的 Token 带 `mode` 标记，拿到正式模式下会被拒绝（反过来也一样）。这是为了防止"演示凭据混进正式环境"。
+
+### 生成演示 Token
+
+```bash
+python -m api.auth --status          # 看当前模式与密钥是否就绪
+python -m api.auth --user us_demo_a  # 给演示用户签一个 2 小时的 Token
+```
+
+### 只读接口
+
+| 方法 | 路径 | 说明 | 认证 |
+|---|---|---|---|
+| GET | `/health` | 健康检查 | 不需要 |
+| GET | `/api/v1/dashboard` | 看板数据（7 天时间轴、下一节课、待确认） | 需要 |
+| GET | `/api/v1/courses` | 课表，可带 `date_from` / `date_to` | 需要 |
+| GET | `/api/v1/exams` | 今天及以后的考试 | 需要 |
+| GET | `/api/v1/tasks` | 待办，可带 `status=todo\|doing\|done` | 需要 |
+| GET | `/api/v1/plans/current` | 当前正式计划与时间块 | 需要 |
+
+Token 两种传法（二者任选）：
+
+```bash
+# 1) 请求头（A 的脚本、curl 用这种）
+curl -H "Authorization: Bearer <token>" http://127.0.0.1:8000/api/v1/dashboard
+
+# 2) 查询参数（C 的看板链接用这种）
+curl "http://127.0.0.1:8000/api/v1/dashboard?token=<token>"
+```
+
+**不要把 `user_id` 当参数传**——接口只认 Token 里的身份，传了也会被忽略。
+
+### Swagger 里怎么测
+
+1. 启动服务后打开 <http://127.0.0.1:8000/docs>
+2. 点右上角 **Authorize**，填 `Bearer <token>`（连 `Bearer ` 一起填）
+3. 展开任意接口点 **Try it out** → **Execute**
 
 ---
 

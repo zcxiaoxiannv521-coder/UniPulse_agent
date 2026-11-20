@@ -646,6 +646,10 @@ V4 明确要求「不能凭链接里的用户编号读取数据」。所以：
 
 所有 token 接口都有 `?token=...`，且**只返回 token 所属用户的数据**。
 
+> **实现状态（2026-11-20）：** `/health`、`/dashboard`、`/courses`、`/exams`、`/tasks`、
+> `/plans/current` 已实现；`/previews/*`、`/notifications/*` 待预览模块完成后实现。
+> Token 由 `api/auth.py` 签发：`python -m api.auth --user us_demo_a`。
+
 ### 5.4 `GET /api/v1/dashboard`
 
 ```
@@ -713,6 +717,17 @@ GET /api/v1/courses?token=...&date_from=2026-11-30&date_to=2026-12-06
   }
 }
 ```
+
+`UNAUTHORIZED` 会在 `details.reason` 里说明具体原因，C 可以据此决定提示文案：
+
+| reason | 含义 |
+|---|---|
+| `MISSING_TOKEN` | 没带 Token |
+| `MALFORMED_TOKEN` | Token 格式不对（或 Authorization 头不是 `Bearer xxx`） |
+| `BAD_SIGNATURE` | 签名不匹配（伪造或密钥变了） |
+| `TOKEN_EXPIRED` | 已过期 |
+| `NOT_YET_VALID` | 签发时间在未来（时钟不一致） |
+| `WRONG_MODE` | 演示 Token 用在正式模式，或反之 |
 
 HTTP 状态码与 `code` 对应关系见第 6 节。
 
