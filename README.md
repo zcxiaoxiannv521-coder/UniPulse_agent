@@ -43,6 +43,7 @@ unipulse/
 ├── docs/
 │   ├── API_CONTRACT.md  #   ★ 接口契约：A/B/C 怎么对接
 │   ├── DATA_SCHEMA.md   #   ★ 数据表设计
+│   ├── GIT_WORKFLOW.md  #   ★ 分支、提交、加队友的协作规则
 │   └── OPEN_QUESTIONS.md#   ★ 待三方确认的问题
 ├── data/                # SQLite 数据库文件（不入库）
 ├── requirements.txt
