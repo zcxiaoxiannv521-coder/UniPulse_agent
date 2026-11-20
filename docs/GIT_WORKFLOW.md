@@ -9,7 +9,7 @@
 
 | 项 | 值 |
 |---|---|
-| 地址 | `https://github.com/<你的账号>/unipulse`（**私有**，建好后把真实地址填进来） |
+| 地址 | `https://github.com/t8z7b7655b-svg/UniPulse`（**私有**，已验证可推送） |
 | 主分支 | `main`，任何时候都应该能跑起来 |
 | 本地目录 | 每个人自己电脑上的 `unipulse/` |
 
@@ -22,7 +22,7 @@
 3. 队友在终端执行：
 
 ```bash
-git clone https://github.com/<你的账号>/unipulse.git
+git clone https://github.com/t8z7b7655b-svg/UniPulse.git
 cd unipulse
 python3 -m venv .venv
 source .venv/bin/activate
