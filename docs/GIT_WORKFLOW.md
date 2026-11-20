@@ -9,7 +9,7 @@
 
 | 项 | 值 |
 |---|---|
-| 地址 | `https://github.com/zcxiaoxiannv521-coder/UniPulse_agent`（**私有**，需登录 GitHub 账号才能访问） |
+| 地址 | `https://github.com/zcxiaoxiannv521-coder/UniPulse_agent`（**公开**，队友无需邀请即可 clone） |
 | 主分支 | `main`，任何时候都应该能跑起来 |
 | 本地目录 | 每个人自己电脑上的 `unipulse/` |
 
