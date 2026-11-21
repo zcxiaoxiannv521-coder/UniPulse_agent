@@ -9,7 +9,7 @@ from api import app as app_module
 from api import auth
 from database.connection import get_connection, init_db
 from demo import seed as seed_module
-from services import clock, queries
+from services import clock, preview as preview_module, queries, scheduler as scheduler_module
 
 
 @pytest.fixture()
@@ -32,6 +32,8 @@ def db_path(tmp_path, monkeypatch):
 def client(db_path, monkeypatch):
     """把 app 指向临时数据库，避免动到 data/unipulse.db。"""
     monkeypatch.setattr(queries, "get_connection", lambda: get_connection(db_path))
+    monkeypatch.setattr(preview_module, "get_connection", lambda: get_connection(db_path))
+    monkeypatch.setattr(scheduler_module, "get_connection", lambda: get_connection(db_path))
     monkeypatch.setattr(app_module, "init_db", lambda *args, **kwargs: db_path)
     monkeypatch.setattr(app_module, "DB_PATH", db_path)
 
@@ -234,3 +236,144 @@ def test_access_log_redacts_token():
     assert "SECRET123" not in message
     assert "token=<redacted>" in message
     assert "x=1" in message
+
+
+# ---------------------------------------------------------------- 预览与确认接口
+def _make_preview(db_path):
+    conn = get_connection(db_path)
+    try:
+        return preview_module.create_preview(
+            seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn
+        )
+    finally:
+        conn.close()
+
+
+def test_get_preview_via_api(client, db_path):
+    p = _make_preview(db_path)
+    resp = client.get(f"/api/v1/previews/{p['preview_id']}", headers=_bearer())
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["preview_id"] == p["preview_id"]
+    assert body["status"] == "pending"
+    assert "diff" in body and "summary" in body
+
+
+def test_preview_endpoints_require_auth(client, db_path):
+    p = _make_preview(db_path)
+
+    assert client.get(f"/api/v1/previews/{p['preview_id']}").status_code == 401
+    assert client.post(f"/api/v1/previews/{p['preview_id']}/confirm",
+                       json={"confirm_code": p["confirm_code"]}).status_code == 401
+    assert client.post(f"/api/v1/previews/{p['preview_id']}/cancel").status_code == 401
+
+
+def test_get_preview_other_user_404(client, db_path):
+    p = _make_preview(db_path)
+    conn = get_connection(db_path)
+    try:
+        with conn:
+            conn.execute("INSERT INTO users (id, name) VALUES ('us_other', '别人')")
+        token = auth.create_token("us_other")
+    finally:
+        conn.close()
+
+    resp = client.get(
+        f"/api/v1/previews/{p['preview_id']}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "PREVIEW_NOT_FOUND"
+
+
+def test_confirm_via_api(client, db_path):
+    p = _make_preview(db_path)
+    resp = client.post(
+        f"/api/v1/previews/{p['preview_id']}/confirm",
+        json={"confirm_code": p["confirm_code"], "expected_version": 1},
+        headers=_bearer(),
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["applied"]["plan_version"] == 2
+
+
+def test_confirm_wrong_code_422(client, db_path):
+    p = _make_preview(db_path)
+    resp = client.post(
+        f"/api/v1/previews/{p['preview_id']}/confirm",
+        json={"confirm_code": "T99"},
+        headers=_bearer(),
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "CONFIRM_CODE_MISMATCH"
+
+
+def test_confirm_missing_code_422(client, db_path):
+    p = _make_preview(db_path)
+    resp = client.post(
+        f"/api/v1/previews/{p['preview_id']}/confirm", json={}, headers=_bearer()
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "MISSING_CONFIRM_CODE"
+
+
+def test_confirm_expired_409(client, db_path):
+    p = _make_preview(db_path)
+    conn = get_connection(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "UPDATE previews SET expires_at = '2026-11-30T08:00:00+08:00' WHERE id = ?",
+                (p["preview_id"],),
+            )
+    finally:
+        conn.close()
+
+    resp = client.post(
+        f"/api/v1/previews/{p['preview_id']}/confirm",
+        json={"confirm_code": p["confirm_code"]},
+        headers=_bearer(),
+    )
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "PREVIEW_EXPIRED"
+
+
+def test_cancel_then_confirm_409(client, db_path):
+    p = _make_preview(db_path)
+    cancelled = client.post(
+        f"/api/v1/previews/{p['preview_id']}/cancel", headers=_bearer()
+    )
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+
+    resp = client.post(
+        f"/api/v1/previews/{p['preview_id']}/confirm",
+        json={"confirm_code": p["confirm_code"]},
+        headers=_bearer(),
+    )
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "PREVIEW_NOT_PENDING"
+
+
+def test_other_user_cannot_confirm(client, db_path):
+    p = _make_preview(db_path)
+    conn = get_connection(db_path)
+    try:
+        with conn:
+            conn.execute("INSERT INTO users (id, name) VALUES ('us_other', '别人')")
+        token = auth.create_token("us_other")
+    finally:
+        conn.close()
+
+    resp = client.post(
+        f"/api/v1/previews/{p['preview_id']}/confirm",
+        json={"confirm_code": p["confirm_code"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 404

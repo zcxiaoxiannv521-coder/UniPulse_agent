@@ -642,12 +642,14 @@ V4 明确要求「不能凭链接里的用户编号读取数据」。所以：
 | GET | `/api/v1/plans/current` | 当前正式计划 | token |
 | GET | `/api/v1/previews/{preview_id}` | 某个草稿的前后差异 | token |
 | POST | `/api/v1/previews/{preview_id}/confirm` | 网页备用确认入口 | token |
+| POST | `/api/v1/previews/{preview_id}/cancel` | 取消草稿 | token |
 | GET | `/api/v1/notifications/{notification_id}` | 通知原文与来源 | token |
 
 所有 token 接口都有 `?token=...`，且**只返回 token 所属用户的数据**。
 
-> **实现状态（2026-11-20）：** `/health`、`/dashboard`、`/courses`、`/exams`、`/tasks`、
-> `/plans/current` 已实现；`/previews/*`、`/notifications/*` 待预览模块完成后实现。
+> **实现状态（2026-11-21）：** `/health`、`/dashboard`、`/courses`、`/exams`、`/tasks`、
+> `/plans/current`、`/previews/{id}`、`/previews/{id}/confirm`、`/previews/{id}/cancel` 已实现；
+> `/notifications/{id}` 待通知模块完成后实现。
 > Token 由 `api/auth.py` 签发：`python -m api.auth --user us_demo_a`。
 
 ### 5.4 `GET /api/v1/dashboard`
@@ -697,13 +699,28 @@ GET /api/v1/courses?token=...&date_from=2026-11-30&date_to=2026-12-06
 ### 5.10 `POST /api/v1/previews/{preview_id}/confirm`
 
 ```json
-{ "token": "eyJ...", "expected_version": 3 }
+{ "confirm_code": "T03", "expected_version": 3 }
 ```
 
-- 成功：返回与 `confirm_preview` 相同结构
-- 版本不符：409 `VERSION_CONFLICT`
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `confirm_code` | **是** | 预览里显示的确认码；必须与预览一致，防止只凭 ID 跳过确认 |
+| `expected_version` | 否 | 调用方看到的正式计划版本；与预览的 `base_version` 不符时拒绝 |
+
+- 成功：返回与 `confirm_preview` 相同结构（`ok` / `applied` / `reminders`）
+- 确认码不对：422 `CONFIRM_CODE_MISMATCH`；没给：422 `MISSING_CONFIRM_CODE`
+- 过期 / 已取消：409 `PREVIEW_EXPIRED` / `PREVIEW_NOT_PENDING`
+- 版本变化：409 `VERSION_CONFLICT`
+- 重复确认：返回 200，`duplicate: true`，不会重复建计划
 
 这是**备用入口**（V4：企微不可用时网页保留简版确认）。主路径永远是企微私聊。
+
+### 5.10.1 `POST /api/v1/previews/{preview_id}/cancel`
+
+无请求体。只把预览置为 `cancelled`，不影响正式计划。
+
+- 成功：200，返回预览详情（`status: "cancelled"`）
+- 已确认/已过期：409 `PREVIEW_NOT_PENDING`
 
 ### 5.11 统一错误响应
 
@@ -855,4 +872,5 @@ V4 硬性要求：「网页校验访问者与企微用户的绑定关系，不�
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | v0.1 | 2026-11-20 | 初稿：按 V4 第 3 节定义 A/B/C 三个角色、7 个服务函数、9 个 HTTP 接口、8 个错误码 |
+| v0.3 | 2026-11-21 | 预览确认落地：新增 `/previews/{id}` 读取、`/confirm`、`/cancel`；confirm 必须带 `confirm_code`（服务端强校验）；补充 404/409/422 的细分错误码 |
 | v0.2 | 2026-11-20 | 只读查询落地：`get_context` 增加 `time_mode` / `plan` / `plan_items`；`Dashboard` 增加 `today` / `time_mode` / `days[].weekday` / `items[].location` / `items[].ref_id` / `next_class.session_id`；所有时间字段统一为带时区 ISO；`missing.reason` 补全枚举 |

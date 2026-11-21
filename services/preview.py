@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import sqlite3
 from contextlib import contextmanager
@@ -389,6 +390,7 @@ def _render(row: sqlite3.Row, now: datetime, reused: bool = False) -> dict:
         "warnings": capacity.get("warnings", []),
         "notes": capacity.get("notes", []),
         "explanation": capacity.get("explanation", ""),
+        "applied": capacity.get("applied"),
         "reused": reused,
     }
 
@@ -593,3 +595,331 @@ def assert_confirmable(
         rendered = _render(row, now)
     rendered["confirmable"] = True
     return rendered
+
+
+# ---------------------------------------------------------------- 确认并提交
+CONFIRM_CODE_PATTERN = re.compile(r"^T\d{2,}$")
+
+# 这些原因的时间块在提交时必须原样保留（不能删了重建）
+PROTECTED_REASONS = {"task_done", "locked", "started", "fixed_event", "not_in_scope"}
+
+
+def _new_id(prefix: str) -> str:
+    return f"{prefix}_{secrets.token_hex(6)}"
+
+
+def _validate_confirm_code(row: sqlite3.Row, confirm_code: str | None) -> None:
+    """确认码必须存在、格式正确、并且与这条预览一致。"""
+    if not confirm_code or not confirm_code.strip():
+        raise PreviewError(
+            "MISSING_CONFIRM_CODE", "确认必须提供预览里显示的确认码（例如 T03）"
+        )
+    code = confirm_code.strip().upper()
+    if not CONFIRM_CODE_PATTERN.match(code):
+        raise PreviewError(
+            "INVALID_CONFIRM_CODE", "确认码格式应为 T + 两位数字，例如 T03"
+        )
+    if code != (row["confirm_code"] or "").upper():
+        raise PreviewError("CONFIRM_CODE_MISMATCH", "确认码与这条预览不匹配")
+
+
+def _ensure_version(db: sqlite3.Connection, user_id: str, row: sqlite3.Row) -> sqlite3.Row | None:
+    """确认时正式计划仍必须是预览基于的那一版。"""
+    plan = _load_current_plan(db, user_id)
+    current_id = plan["id"] if plan else None
+    current_version = int(plan["version"]) if plan else 0
+    if current_id != row["base_plan_id"] or current_version != int(row["base_version"]):
+        raise PreviewError(
+            "VERSION_CONFLICT",
+            f"正式计划已变化（当前 v{current_version}，预览基于 v{row['base_version']}），请重新生成预览",
+        )
+    return plan
+
+
+def _insert_plan(
+    db: sqlite3.Connection,
+    *,
+    plan_id: str,
+    user_id: str,
+    goal_id: str | None,
+    version: int,
+    based_on_plan_id: str | None,
+) -> None:
+    db.execute(
+        """
+        INSERT INTO plans (id, user_id, goal_id, status, version,
+                           based_on_plan_id, note, updated_at)
+        VALUES (?, ?, ?, 'confirmed', ?, ?, NULL, datetime('now', 'localtime'))
+        """,
+        (plan_id, user_id, goal_id, version, based_on_plan_id),
+    )
+
+
+def _supersede_plan(db: sqlite3.Connection, user_id: str, plan_id: str) -> None:
+    db.execute(
+        "UPDATE plans SET status = 'superseded', "
+        "updated_at = datetime('now', 'localtime') "
+        "WHERE id = ? AND user_id = ? AND status = 'confirmed'",
+        (plan_id, user_id),
+    )
+
+
+def _insert_plan_items(
+    db: sqlite3.Connection,
+    *,
+    plan_id: str,
+    schedule_items: list[dict],
+    protected_items: list[dict],
+) -> int:
+    """写入新计划的时间块：新排的 + 必须保留的旧块。"""
+    rows: list[tuple] = []
+    for item in schedule_items:
+        rows.append(
+            (
+                _new_id("pi"),
+                plan_id,
+                item["start_at"],
+                item["end_at"],
+                item["title"],
+                "task",
+                item.get("task_id"),
+                None,
+                None,
+                0,
+            )
+        )
+    for item in protected_items:
+        rows.append(
+            (
+                _new_id("pi"),
+                plan_id,
+                item["start_at"],
+                item["end_at"],
+                item["title"],
+                item["item_type"],
+                item.get("task_id"),
+                item.get("session_id"),
+                item.get("exam_id"),
+                1 if item.get("is_locked") else 0,
+            )
+        )
+    db.executemany(
+        """
+        INSERT INTO plan_items (id, plan_id, start_at, end_at, title, item_type,
+                                task_id, session_id, exam_id, is_locked)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+    return len(rows)
+
+
+def _cancel_reminders(db: sqlite3.Connection, user_id: str, plan_id: str) -> int:
+    """只失效"属于将被替换的那份计划"的待发提醒，别的计划不动。"""
+    cursor = db.execute(
+        """
+        UPDATE reminders SET status = 'cancelled'
+        WHERE user_id = ? AND status IN ('queued', 'failed')
+          AND plan_item_id IN (SELECT id FROM plan_items WHERE plan_id = ?)
+        """,
+        (user_id, plan_id),
+    )
+    return cursor.rowcount or 0
+
+
+def _mark_confirmed(
+    db: sqlite3.Connection,
+    *,
+    user_id: str,
+    preview_id: str,
+    confirmed_at: str,
+    applied: dict,
+) -> None:
+    row = db.execute(
+        "SELECT capacity_json FROM previews WHERE id = ? AND user_id = ?",
+        (preview_id, user_id),
+    ).fetchone()
+    capacity = json.loads(row["capacity_json"] or "{}") if row else {}
+    capacity["applied"] = applied
+    cursor = db.execute(
+        """
+        UPDATE previews
+        SET status = 'confirmed', confirmed_at = ?, capacity_json = ?
+        WHERE id = ? AND user_id = ? AND status = 'pending'
+        """,
+        (confirmed_at, json.dumps(capacity, ensure_ascii=False, sort_keys=True),
+         preview_id, user_id),
+    )
+    if cursor.rowcount != 1:
+        raise PreviewError("PREVIEW_NOT_PENDING", "预览状态已变化，确认未生效")
+
+
+def _duplicate_result(db: sqlite3.Connection, row: sqlite3.Row, now: datetime) -> dict:
+    """重复确认：返回第一次的结果，不写任何东西。"""
+    capacity = json.loads(row["capacity_json"] or "{}")
+    applied = capacity.get("applied") or {}
+    diff = json.loads(row["diff_json"] or "{}")
+    plan = db.execute(
+        "SELECT id, version, status FROM plans WHERE id = ? AND user_id = ?",
+        (applied.get("plan_id"), row["user_id"]),
+    ).fetchone()
+    return {
+        "ok": True,
+        "duplicate": True,
+        "preview_id": row["id"],
+        "applied": {
+            "plan_id": applied.get("plan_id"),
+            "plan_version": plan["version"] if plan else applied.get("plan_version"),
+            "plan_status": plan["status"] if plan else None,
+            "changed": diff.get("changed", []),
+            "removed": diff.get("removed", []),
+            "kept": diff.get("kept", []),
+            "added": diff.get("added", []),
+            "items_written": applied.get("items_written"),
+            "confirmed_at": row["confirmed_at"],
+        },
+        "reminders": {"cancelled": 0, "queued": 0},
+        "verified_at": now.isoformat(),
+    }
+
+
+def confirm_preview(
+    user_id: str,
+    preview_id: str,
+    confirm_code: str | None = None,
+    *,
+    conn: sqlite3.Connection | None = None,
+    expected_version: int | None = None,
+) -> dict:
+    """把预览提交为新的正式计划（单事务）。
+
+    参数：
+        user_id          可信身份里的用户 ID
+        preview_id       预览 ID
+        confirm_code     用户在企微里回填的确认码（如 T03），必须与预览一致
+        expected_version 可选，前端/调用方认为的当前计划版本（用于冲突检测）
+
+    返回：
+        {"ok", "duplicate", "preview_id", "applied": {...}, "reminders": {...}, "verified_at"}
+
+    幂等：重复确认返回第一次的结果，不会重复建计划、不会重复递增版本。
+    """
+    now = clock.get_now()
+
+    with _connection(conn) as db:
+        _load_user(db, user_id)
+        row = _load_preview_row(db, user_id, preview_id)
+        _validate_confirm_code(row, confirm_code)
+
+        status = _effective_status(row, now)
+        if status == "confirmed":
+            return _duplicate_result(db, row, now)
+        if status == "expired":
+            raise PreviewError("PREVIEW_EXPIRED", "预览已过期，请重新生成")
+        if status != "pending":
+            raise PreviewError(
+                "PREVIEW_NOT_PENDING", f"预览当前状态是 {status}，不能确认"
+            )
+
+        if expected_version is not None and int(expected_version) != int(row["base_version"]):
+            raise PreviewError(
+                "VERSION_CONFLICT",
+                f"你看到的版本是 {expected_version}，预览基于 {row['base_version']}，请刷新后重试",
+            )
+
+        _ensure_version(db, user_id, row)
+
+        capacity = json.loads(row["capacity_json"] or "{}")
+        schedule_items = capacity.get("schedule_items") or []
+        old_items = (
+            _load_plan_items(db, user_id, row["base_plan_id"])
+            if row["base_plan_id"]
+            else []
+        )
+        protected_items = [
+            item for item in old_items if _protection_of(item, now)
+        ]
+        diff = json.loads(row["diff_json"] or "{}")
+        goal_id = row["goal_id"]
+        created_at = now.isoformat()
+
+        with db:                                  # ---- 单事务开始 ----
+            fresh = _load_preview_row(db, user_id, preview_id)
+            if _effective_status(fresh, now) != "pending":
+                raise PreviewError("PREVIEW_NOT_PENDING", "预览状态已变化，确认未生效")
+            current_plan = _ensure_version(db, user_id, fresh)
+
+            new_version = (int(current_plan["version"]) if current_plan else 0) + 1
+            new_plan_id = _new_id("pl")
+
+            _insert_plan(
+                db,
+                plan_id=new_plan_id,
+                user_id=user_id,
+                goal_id=goal_id,
+                version=new_version,
+                based_on_plan_id=row["base_plan_id"],
+            )
+            if current_plan is not None:
+                _supersede_plan(db, user_id, current_plan["id"])
+
+            items_written = _insert_plan_items(
+                db,
+                plan_id=new_plan_id,
+                schedule_items=schedule_items,
+                protected_items=protected_items,
+            )
+            reminders_cancelled = (
+                _cancel_reminders(db, user_id, row["base_plan_id"])
+                if row["base_plan_id"]
+                else 0
+            )
+
+            applied = {
+                "plan_id": new_plan_id,
+                "plan_version": new_version,
+                "items_written": items_written,
+                "reminders_cancelled": reminders_cancelled,
+                "confirmed_at": created_at,
+            }
+            _mark_confirmed(
+                db,
+                user_id=user_id,
+                preview_id=preview_id,
+                confirmed_at=created_at,
+                applied=applied,
+            )
+        # ---- 事务提交 ----
+
+        # 写入后重查：确认落库的是我们以为的东西
+        verified = db.execute(
+            "SELECT id, version, status FROM plans WHERE id = ? AND user_id = ?",
+            (new_plan_id, user_id),
+        ).fetchone()
+        if verified is None or verified["status"] != "confirmed":
+            raise PreviewError("INTERNAL_ERROR", "计划写入后校验失败")
+        item_count = db.execute(
+            "SELECT COUNT(*) AS n FROM plan_items WHERE plan_id = ?", (new_plan_id,)
+        ).fetchone()["n"]
+        if item_count != items_written:
+            raise PreviewError("INTERNAL_ERROR", "计划时间块数量校验失败")
+
+        return {
+            "ok": True,
+            "duplicate": False,
+            "preview_id": preview_id,
+            "applied": {
+                "plan_id": new_plan_id,
+                "plan_version": int(verified["version"]),
+                "plan_status": verified["status"],
+                "based_on_plan_id": row["base_plan_id"],
+                "changed": diff.get("changed", []),
+                "removed": diff.get("removed", []),
+                "kept": diff.get("kept", []),
+                "added": diff.get("added", []),
+                "items_written": items_written,
+                "confirmed_at": created_at,
+            },
+            "reminders": {"cancelled": reminders_cancelled, "queued": 0},
+            "verified_at": now.isoformat(),
+        }

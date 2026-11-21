@@ -400,3 +400,304 @@ def test_version_conflict_detected(conn):
             seed_module.DEMO_USER_ID, result["preview_id"], conn=conn
         )
     assert excinfo.value.code == "VERSION_CONFLICT"
+
+
+# ---------------------------------------------------------------- 确认提交
+def _confirmed_plan(conn, user_id):
+    return conn.execute(
+        "SELECT * FROM plans WHERE user_id = ? AND status = 'confirmed' "
+        "ORDER BY version DESC LIMIT 1",
+        (user_id,),
+    ).fetchone()
+
+
+def _plan_items(conn, plan_id):
+    return conn.execute(
+        "SELECT * FROM plan_items WHERE plan_id = ? ORDER BY start_at", (plan_id,)
+    ).fetchall()
+
+
+def test_confirm_success(conn):
+    """正常确认：新计划 v2，旧计划 superseded，预览 confirmed。"""
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+    result = preview.confirm_preview(
+        seed_module.DEMO_USER_ID, p["preview_id"], p["confirm_code"], conn=conn
+    )
+
+    assert result["ok"] is True
+    assert result["duplicate"] is False
+    assert result["applied"]["plan_version"] == 2
+    assert result["applied"]["plan_status"] == "confirmed"
+
+    plan = _confirmed_plan(conn, seed_module.DEMO_USER_ID)
+    assert plan["version"] == 2
+    assert plan["based_on_plan_id"] == seed_module.PLAN_ID
+
+    old = conn.execute(
+        "SELECT status FROM plans WHERE id = ?", (seed_module.PLAN_ID,)
+    ).fetchone()
+    assert old["status"] == "superseded"
+
+    row = conn.execute(
+        "SELECT status, confirmed_at FROM previews WHERE id = ?", (p["preview_id"],)
+    ).fetchone()
+    assert row["status"] == "confirmed"
+    assert row["confirmed_at"] is not None
+
+
+def test_confirm_writes_new_schedule(conn):
+    """考试提前后确认：新计划只剩两个必做块。"""
+    with conn:
+        conn.execute(
+            "UPDATE exams SET exam_date = '2026-12-02', start_time = '14:00' "
+            "WHERE id = ?",
+            (seed_module.EXAM_ID,),
+        )
+
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+    preview.confirm_preview(
+        seed_module.DEMO_USER_ID, p["preview_id"], p["confirm_code"], conn=conn
+    )
+
+    plan = _confirmed_plan(conn, seed_module.DEMO_USER_ID)
+    items = _plan_items(conn, plan["id"])
+
+    assert [item["title"] for item in items] == ["复习第三章", "复习第四章"]
+    assert items[0]["start_at"] == "2026-11-30T19:00:00+08:00"
+    assert items[1]["end_at"] == "2026-12-01T20:30:00+08:00"
+
+
+def test_confirm_is_idempotent(conn):
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+    first = preview.confirm_preview(
+        seed_module.DEMO_USER_ID, p["preview_id"], p["confirm_code"], conn=conn
+    )
+    second = preview.confirm_preview(
+        seed_module.DEMO_USER_ID, p["preview_id"], p["confirm_code"], conn=conn
+    )
+
+    assert second["duplicate"] is True
+    assert second["applied"]["plan_version"] == first["applied"]["plan_version"]
+    count = conn.execute(
+        "SELECT COUNT(*) AS n FROM plans WHERE user_id = ?",
+        (seed_module.DEMO_USER_ID,),
+    ).fetchone()["n"]
+    assert count == 2          # 只有 v1 和 v2，没有重复建计划
+
+
+def test_confirm_expired_rejected(conn):
+    p = preview.create_preview(
+        seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn, ttl_minutes=5
+    )
+    with conn:
+        conn.execute(
+            "UPDATE previews SET expires_at = '2026-11-30T08:00:00+08:00' WHERE id = ?",
+            (p["preview_id"],),
+        )
+
+    with pytest.raises(PreviewError) as excinfo:
+        preview.confirm_preview(
+            seed_module.DEMO_USER_ID, p["preview_id"], p["confirm_code"], conn=conn
+        )
+    assert excinfo.value.code == "PREVIEW_EXPIRED"
+    assert _confirmed_plan(conn, seed_module.DEMO_USER_ID)["version"] == 1
+
+
+def test_confirm_cancelled_rejected(conn):
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+    preview.cancel_preview(seed_module.DEMO_USER_ID, p["preview_id"], conn=conn)
+
+    with pytest.raises(PreviewError) as excinfo:
+        preview.confirm_preview(
+            seed_module.DEMO_USER_ID, p["preview_id"], p["confirm_code"], conn=conn
+        )
+    assert excinfo.value.code == "PREVIEW_NOT_PENDING"
+
+
+def test_confirm_version_conflict(conn):
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+    with conn:
+        conn.execute(
+            "UPDATE plans SET version = version + 1 WHERE id = ?",
+            (seed_module.PLAN_ID,),
+        )
+
+    with pytest.raises(PreviewError) as excinfo:
+        preview.confirm_preview(
+            seed_module.DEMO_USER_ID, p["preview_id"], p["confirm_code"], conn=conn
+        )
+    assert excinfo.value.code == "VERSION_CONFLICT"
+
+
+def test_confirm_expected_version_conflict(conn):
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+
+    with pytest.raises(PreviewError) as excinfo:
+        preview.confirm_preview(
+            seed_module.DEMO_USER_ID, p["preview_id"], p["confirm_code"],
+            conn=conn, expected_version=99,
+        )
+    assert excinfo.value.code == "VERSION_CONFLICT"
+
+
+def test_confirm_wrong_code(conn):
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+
+    with pytest.raises(PreviewError) as excinfo:
+        preview.confirm_preview(
+            seed_module.DEMO_USER_ID, p["preview_id"], "T99", conn=conn
+        )
+    assert excinfo.value.code == "CONFIRM_CODE_MISMATCH"
+
+
+def test_confirm_missing_code(conn):
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+
+    with pytest.raises(PreviewError) as excinfo:
+        preview.confirm_preview(seed_module.DEMO_USER_ID, p["preview_id"], None, conn=conn)
+    assert excinfo.value.code == "MISSING_CONFIRM_CODE"
+
+
+def test_confirm_invalid_code_format(conn):
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+
+    with pytest.raises(PreviewError) as excinfo:
+        preview.confirm_preview(
+            seed_module.DEMO_USER_ID, p["preview_id"], "T", conn=conn
+        )
+    assert excinfo.value.code == "INVALID_CONFIRM_CODE"
+
+
+def test_confirm_other_user(conn):
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+    with conn:
+        conn.execute("INSERT INTO users (id, name) VALUES ('us_other', '别人')")
+
+    with pytest.raises(PreviewError) as excinfo:
+        preview.confirm_preview(
+            "us_other", p["preview_id"], p["confirm_code"], conn=conn
+        )
+    assert excinfo.value.code == "PREVIEW_NOT_FOUND"
+
+
+def test_confirm_protects_completed_block(conn):
+    with conn:
+        conn.execute("UPDATE tasks SET status = 'done' WHERE id = 'tk_demo_ch3'")
+
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+    preview.confirm_preview(
+        seed_module.DEMO_USER_ID, p["preview_id"], p["confirm_code"], conn=conn
+    )
+
+    plan = _confirmed_plan(conn, seed_module.DEMO_USER_ID)
+    items = _plan_items(conn, plan["id"])
+    ch3 = [item for item in items if item["task_id"] == "tk_demo_ch3"]
+    assert len(ch3) == 1
+    assert ch3[0]["start_at"] == "2026-11-30T19:00:00+08:00"
+
+
+def test_confirm_protects_locked_block(conn):
+    with conn:
+        conn.execute("UPDATE plan_items SET is_locked = 1 WHERE id = 'pi_demo_01'")
+
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+    preview.confirm_preview(
+        seed_module.DEMO_USER_ID, p["preview_id"], p["confirm_code"], conn=conn
+    )
+
+    plan = _confirmed_plan(conn, seed_module.DEMO_USER_ID)
+    locked = [
+        item for item in _plan_items(conn, plan["id"])
+        if item["task_id"] == "tk_demo_ch3" and item["is_locked"] == 1
+    ]
+    assert len(locked) == 1
+    assert locked[0]["start_at"] == "2026-11-30T19:00:00+08:00"
+
+
+def test_confirm_protects_started_block(conn):
+    with conn:
+        conn.execute(
+            "UPDATE plan_items SET start_at = ?, end_at = ? WHERE id = 'pi_demo_01'",
+            ("2026-11-30T08:00:00+08:00", "2026-11-30T09:00:00+08:00"),
+        )
+
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+    preview.confirm_preview(
+        seed_module.DEMO_USER_ID, p["preview_id"], p["confirm_code"], conn=conn
+    )
+
+    plan = _confirmed_plan(conn, seed_module.DEMO_USER_ID)
+    started = [
+        item for item in _plan_items(conn, plan["id"])
+        if item["start_at"] == "2026-11-30T08:00:00+08:00"
+    ]
+    assert len(started) == 1
+
+
+def test_confirm_keeps_unaffected_blocks(conn):
+    """考试改期但前三章/四章的时间没变，确认后仍在。"""
+    with conn:
+        conn.execute(
+            "UPDATE exams SET exam_date = '2026-12-02', start_time = '14:00' "
+            "WHERE id = ?",
+            (seed_module.EXAM_ID,),
+        )
+
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+    preview.confirm_preview(
+        seed_module.DEMO_USER_ID, p["preview_id"], p["confirm_code"], conn=conn
+    )
+
+    plan = _confirmed_plan(conn, seed_module.DEMO_USER_ID)
+    items = {item["task_id"]: item for item in _plan_items(conn, plan["id"])}
+    assert items["tk_demo_ch3"]["start_at"] == "2026-11-30T19:00:00+08:00"
+    assert items["tk_demo_ch4"]["start_at"] == "2026-12-01T19:00:00+08:00"
+
+
+def test_confirm_rolls_back_on_failure(conn, monkeypatch):
+    """写到一半失败：旧计划仍是 confirmed，预览仍是 pending。"""
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("模拟写时间块失败")
+
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+    monkeypatch.setattr(preview, "_insert_plan_items", boom)
+
+    with pytest.raises(RuntimeError):
+        preview.confirm_preview(
+            seed_module.DEMO_USER_ID, p["preview_id"], p["confirm_code"], conn=conn
+        )
+
+    plan = _confirmed_plan(conn, seed_module.DEMO_USER_ID)
+    assert plan["id"] == seed_module.PLAN_ID
+    assert plan["version"] == 1
+    assert conn.execute("SELECT COUNT(*) AS n FROM plans").fetchone()["n"] == 1
+    row = conn.execute(
+        "SELECT status FROM previews WHERE id = ?", (p["preview_id"],)
+    ).fetchone()
+    assert row["status"] == "pending"
+
+
+def test_confirm_cancels_related_reminders_only(conn):
+    """只失效被替换计划里的提醒，别的提醒不动。"""
+    with conn:
+        conn.execute(
+            "INSERT INTO reminders (id, user_id, plan_item_id, remind_at, status) "
+            "VALUES ('rm_old', ?, 'pi_demo_01', '2026-11-30T18:50:00+08:00', 'queued')",
+            (seed_module.DEMO_USER_ID,),
+        )
+        conn.execute(
+            "INSERT INTO reminders (id, user_id, plan_item_id, remind_at, status) "
+            "VALUES ('rm_other', ?, NULL, '2026-12-05T08:00:00+08:00', 'queued')",
+            (seed_module.DEMO_USER_ID,),
+        )
+
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+    result = preview.confirm_preview(
+        seed_module.DEMO_USER_ID, p["preview_id"], p["confirm_code"], conn=conn
+    )
+
+    assert result["reminders"]["cancelled"] == 1
+    rows = {row["id"]: row["status"] for row in conn.execute("SELECT id, status FROM reminders")}
+    assert rows["rm_old"] == "cancelled"
+    assert rows["rm_other"] == "queued"

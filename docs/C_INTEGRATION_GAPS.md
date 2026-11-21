@@ -97,10 +97,10 @@ C 的 `snapshot()` 强制要求这 12 个 key：
 
 | 需求 | B 侧现状 |
 |---|---|
-| 生成预览 | 🟡 `create_preview()` 已实现，无 HTTP |
-| 查看预览差异 | 🟡 `get_preview()` 已实现，无 HTTP |
-| 确认前校验 | 🟡 `assert_confirmable()` 已实现，无 HTTP |
-| 提交确认 | ❌ 未实现（下一轮） |
+| 生成预览 | 🟡 `create_preview()` 已实现，**仍无 HTTP**（B3 未要求） |
+| 查看预览差异 | ✅ `GET /api/v1/previews/{id}`（2026-11-21） |
+| 提交确认 | ✅ `POST /api/v1/previews/{id}/confirm`（需带 `confirm_code`） |
+| 取消预览 | ✅ `POST /api/v1/previews/{id}/cancel` |
 
 ### P2：网页写入与 Agent
 

@@ -20,12 +20,13 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from api import auth
 from database.connection import DB_PATH, init_db
-from services import clock, queries
+from services import clock, preview, queries
 
-API_VERSION = "0.2.0"
+API_VERSION = "0.3.0"
 
 _TOKEN_IN_QUERY = re.compile(r"(token=)[^&\s\"']+")
 
@@ -95,6 +96,23 @@ app = FastAPI(
 @app.exception_handler(auth.AuthError)
 async def _handle_auth_error(request: Request, exc: auth.AuthError) -> JSONResponse:
     return _error(401, exc.code, exc.message, {"reason": exc.reason})
+
+
+_PREVIEW_STATUS = {
+    "PREVIEW_NOT_FOUND": 404,
+    "USER_NOT_FOUND": 404,
+    "VERSION_CONFLICT": 409,
+    "PREVIEW_EXPIRED": 409,
+    "PREVIEW_NOT_PENDING": 409,
+}
+
+
+@app.exception_handler(preview.PreviewError)
+async def _handle_preview_error(
+    request: Request, exc: preview.PreviewError
+) -> JSONResponse:
+    status_code = _PREVIEW_STATUS.get(exc.code, 422)
+    return _error(status_code, exc.code, exc.message)
 
 
 @app.exception_handler(queries.UserNotFoundError)
@@ -183,3 +201,56 @@ def tasks(
 def current_plan(identity: auth.Identity = Depends(auth.require_identity)) -> dict:
     """当前已确认的计划及其时间块；没有正式计划时 plan 为 null。"""
     return queries.get_current_plan(identity.user_id)
+
+
+# ---------------------------------------------------------------- 预览与确认
+class ConfirmRequest(BaseModel):
+    """确认请求体。confirm_code 是预览里显示的编号，不能省略。"""
+
+    confirm_code: str | None = Field(
+        default=None, description="预览里显示的确认码，例如 T03"
+    )
+    expected_version: int | None = Field(
+        default=None, description="调用方看到的正式计划版本，用于冲突检测"
+    )
+
+
+@app.get("/api/v1/previews/{preview_id}", tags=["预览"], summary="预览详情")
+def get_preview_detail(
+    preview_id: str,
+    identity: auth.Identity = Depends(auth.require_identity),
+) -> dict:
+    """返回当前用户自己的预览详情（含新旧计划差异与缺口）。
+
+    预览不存在或不属于当前用户时返回 404。
+    """
+    return preview.get_preview(identity.user_id, preview_id)
+
+
+@app.post("/api/v1/previews/{preview_id}/confirm", tags=["预览"], summary="确认并提交预览")
+def confirm_preview_route(
+    preview_id: str,
+    payload: ConfirmRequest | None = None,
+    identity: auth.Identity = Depends(auth.require_identity),
+) -> dict:
+    """把预览提交为新的正式计划（单事务，幂等）。
+
+    - 409 `VERSION_CONFLICT`：正式计划已变化，需要重新生成预览
+    - 409 `PREVIEW_EXPIRED` / `PREVIEW_NOT_PENDING`：过期或已取消
+    - 422 `CONFIRM_CODE_MISMATCH` / `MISSING_CONFIRM_CODE`：确认码不对或没给
+    """
+    return preview.confirm_preview(
+        identity.user_id,
+        preview_id,
+        confirm_code=payload.confirm_code if payload else None,
+        expected_version=payload.expected_version if payload else None,
+    )
+
+
+@app.post("/api/v1/previews/{preview_id}/cancel", tags=["预览"], summary="取消预览")
+def cancel_preview_route(
+    preview_id: str,
+    identity: auth.Identity = Depends(auth.require_identity),
+) -> dict:
+    """取消一条待确认预览。只改预览状态，不动正式计划。"""
+    return preview.cancel_preview(identity.user_id, preview_id)

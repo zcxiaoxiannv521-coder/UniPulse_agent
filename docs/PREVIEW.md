@@ -243,8 +243,80 @@ PY
 
 ---
 
-## 10. 下一步
+## 10. 确认提交（confirm_preview）
 
-1. `confirm_preview`：校验通过后单事务提交（计划版本 +1、写计划块、失效旧提醒）
-2. HTTP：`GET /api/v1/previews/{id}`、`POST /api/v1/previews/{id}/confirm`
-3. `capacity_choice`：用户选择加时段/移选做后重算
+```python
+confirm_preview(user_id, preview_id, confirm_code, *, conn=None, expected_version=None)
+```
+
+### 10.1 校验顺序
+
+1. 用户存在、预览属于该用户（否则 `PREVIEW_NOT_FOUND`）
+2. 确认码：缺失 → `MISSING_CONFIRM_CODE`；格式错 → `INVALID_CONFIRM_CODE`；
+   与预览不一致 → `CONFIRM_CODE_MISMATCH`
+3. 状态：`confirmed` → **幂等返回第一次结果**；`expired` → `PREVIEW_EXPIRED`；
+   `cancelled` → `PREVIEW_NOT_PENDING`
+4. `expected_version`（如果传了）与预览 `base_version` 不一致 → `VERSION_CONFLICT`
+5. 当前正式计划的 id/version 必须仍等于预览的 `base_plan_id/base_version`，否则 `VERSION_CONFLICT`
+
+### 10.2 单事务写入
+
+```
+BEGIN
+  ① 重新读预览，确认仍是 pending
+  ② 重新校验正式计划版本（防止两次检查之间被别人改）
+  ③ INSERT 新 plans（status=confirmed, version=旧版本+1, based_on_plan_id=旧计划）
+  ④ UPDATE 旧计划 → superseded
+  ⑤ INSERT 新 plan_items（新排的块 + 必须保留的旧块）
+  ⑥ UPDATE 旧计划相关 reminders → cancelled
+  ⑦ UPDATE 预览 → confirmed，confirmed_at，并在 capacity_json.applied 记录结果
+COMMIT
+```
+
+任何一步抛异常都整体 ROLLBACK：不会出现"新计划建了一半"或"预览已确认但计划没变"。
+
+提交后还会**回读校验**：新计划状态必须是 confirmed，时间块数量必须等于写入数量。
+
+### 10.3 哪些旧时间块会保留
+
+| 状态 | 处理 |
+|---|---|
+| 任务已完成（`tasks.status='done'`） | 原样复制到新计划，`is_locked` 保持不变 |
+| 时间块已开始（`start_at <= now`） | 原样复制 |
+| 时间块锁定（`is_locked=1`） | 原样复制，并保留 `is_locked=1` |
+| 课程 / 考试块 | 原样复制（不属于重排范围） |
+| 没有 `task_id` 的自定义块 | 原样复制 |
+| 时间没变的学习块 | 用排程结果重新写入（内容一致） |
+| 被移出的块 | 只留在旧计划里（旧计划变 superseded，历史可查） |
+
+匹配全部基于 `task_id`、`item_type`、时间，不用标题。
+
+### 10.4 幂等
+
+- 第一次确认：`duplicate: false`，写新计划、版本 +1
+- 第二次确认：`duplicate: true`，返回第一次的 `applied`，**不建计划、不递增版本**
+
+### 10.5 提醒
+
+`reminders` 表通过 `plan_item_id` 关联时间块，可以判断归属：
+
+- 只失效「被替换的那份计划」里时间块关联的 `queued/failed` 提醒
+- 其它计划、`plan_item_id` 为空的提醒不动
+- **不新建提醒**（提醒排期逻辑还没做，P1）
+- 失效与计划写入在同一个事务里，不会出现"提醒取消了但计划没更新"
+
+### 10.6 限制
+
+1. **确认不会修改考试时间**：`previews` 没有存"新考试时间"的字段，
+   当前流程假设考试日期已经在别处更新（演示/测试里是直接改 `exams`）。
+   如果要支持"贴通知 → 确认 → 考试时间一起更新"，需要让预览携带 `exam_update`，
+   这是下一步要定的接口（见 REPORT / 待确认）。
+2. **已开始的时间块会被保留，但对应任务可能被重新排到别处**：`tasks` 表没有"进行中"状态，
+   无法判断任务已完成多少。这是 schema 限制，没有擅自推断。
+3. **不新建提醒**：`reminders` 只有失效逻辑。
+
+## 11. 下一步
+
+1. 预览携带 `exam_update`（改期与计划一起确认）
+2. `capacity_choice`：用户选择加时段/移选做后重算
+3. 提醒排期（P1）
