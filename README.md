@@ -57,6 +57,7 @@ unipulse/
 │   ├── DEVELOPMENT_GUIDE.md # ★ 协作流程：环境、分支、提交、合并、冲突
 │   ├── SCHEDULER.md     #   排程算法说明（规则、返回结构、边界）
 │   ├── PREVIEW.md       #   预览服务说明（差异、有效期、版本检查）
+│   ├── C_INTEGRATION_GAPS.md # C 网页与 B 后端的接口缺口
 │   ├── INTERFACE_REVIEW.md  # ★ 给 A / C 的接口审核说明
 │   ├── GIT_WORKFLOW.md  #   分支与安全速查（详见 DEVELOPMENT_GUIDE）
 │   └── OPEN_QUESTIONS.md#   ★ 待三方确认的问题
