@@ -20,7 +20,8 @@
 | 第三阶段 | 时间管理（`services/clock.py`）、演示数据（`demo/seed.py`）、只读查询（`services/queries.py`） | ✅ 完成 |
 | 第三阶段·接口 | 认证（`api/auth.py`）+ 5 个只读 HTTP 接口 | ✅ 完成 |
 | 第三阶段·排程 | 单门考试排程 `services/scheduler.py` | ✅ 完成（只读，未接预览） |
-| 第三阶段·待做 | 预览与确认 | ⬜ 未开始 |
+| 第三阶段·预览 | 预览草稿 `services/preview.py`（不提交正式计划） | ✅ 完成（未接 HTTP） |
+| 第三阶段·待做 | 确认提交（新版本 + 时间块 + 提醒） | ⬜ 未开始 |
 | 第四阶段 | 企微接入（A）、看板（C）、联调 | ⬜ 未开始 |
 
 **现在仓库里没有排程算法、没有 Agent、没有企微代码。** 这是故意的——先把时间基准、演示数据、只读接口对齐，再写会改数据的逻辑。
@@ -41,7 +42,8 @@ unipulse/
 ├── services/            # B：业务逻辑
 │   ├── clock.py         #   统一时间入口（real / demo 两种模式）
 │   ├── queries.py       #   只读查询（上下文 / 看板）
-│   └── scheduler.py     #   单门考试排程（只读，不写库）
+│   ├── scheduler.py     #   单门考试排程（只读，不写库）
+│   └── preview.py       #   排程预览草稿（只写 previews，不改正式计划）
 ├── tests/               # B：测试
 │   ├── test_smoke.py    #   冒烟测试：建库、接口、连接
 │   ├── test_clock.py    #   时间模式、时区、错误配置、跨天
@@ -54,6 +56,7 @@ unipulse/
 │   ├── DATA_SCHEMA.md   #   ★ 数据表设计
 │   ├── DEVELOPMENT_GUIDE.md # ★ 协作流程：环境、分支、提交、合并、冲突
 │   ├── SCHEDULER.md     #   排程算法说明（规则、返回结构、边界）
+│   ├── PREVIEW.md       #   预览服务说明（差异、有效期、版本检查）
 │   ├── INTERFACE_REVIEW.md  # ★ 给 A / C 的接口审核说明
 │   ├── GIT_WORKFLOW.md  #   分支与安全速查（详见 DEVELOPMENT_GUIDE）
 │   └── OPEN_QUESTIONS.md#   ★ 待三方确认的问题

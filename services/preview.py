@@ -1,0 +1,595 @@
+"""排程预览（草稿）服务。
+
+作用：
+    把排程结果变成一条「待用户确认的草稿」写进 previews 表，
+    同时给出新旧计划差异。**不修改正式计划**——plans / plan_items / tasks / exams
+    一个字节都不动，真正提交留给后续的确认流程。
+
+四条硬规则：
+    1. 只写 previews 表；正式数据只读
+    2. 每个预览记录 base_plan_id / base_version；正式计划版本变了，这个预览就不能再确认
+    3. 预览绑定用户；别人的预览 id 一律当作不存在
+    4. 过期 / 已确认 / 已取消的预览都不能再确认
+
+已知限制（对应 OPEN_QUESTIONS T11）：
+    候选时间窗口只来自当前正式计划里的「可移动学习块」，
+    不会自动发现计划之外的空闲时间。预览的 notes 里会写明这一点。
+
+用法：
+    from services.preview import create_preview, get_preview, assert_confirmable
+
+    preview = create_preview("us_demo_a", "ex_demo_ml_final")
+    preview["confirm_code"]    # 给用户回的编号，如 T01
+    preview["diff"]["removed"] # 这次会移出哪些学习块
+"""
+
+from __future__ import annotations
+
+import json
+import secrets
+import sqlite3
+from contextlib import contextmanager
+from datetime import datetime, timedelta
+from typing import Iterator
+
+from database.connection import get_connection
+from services import clock
+from services import scheduler
+
+ENV_PREVIEW_TTL = "UNIPULSE_PREVIEW_TTL_MINUTES"
+DEFAULT_TTL_MINUTES = 30
+
+# 提示文案：让 A/C 知道这次预览的能力边界
+NOTE_WINDOW_SOURCE = (
+    "候选时间窗口仅来自当前正式计划中的可移动学习块；"
+    "不会自动寻找计划之外的空闲时间（T11 待确认）。"
+)
+NOTE_NOT_COMMITTED = "这是待确认草稿，正式计划没有被修改；确认后才会生效。"
+
+
+class PreviewError(Exception):
+    """预览相关错误。"""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+@contextmanager
+def _connection(conn: sqlite3.Connection | None) -> Iterator[sqlite3.Connection]:
+    if conn is not None:
+        yield conn
+        return
+    own = get_connection()
+    try:
+        yield own
+    finally:
+        own.close()
+
+
+# ---------------------------------------------------------------- 工具
+def get_ttl_minutes(ttl_minutes: int | None = None) -> int:
+    if ttl_minutes is not None:
+        if ttl_minutes <= 0:
+            raise PreviewError("INVALID_TTL", "预览有效期必须大于 0 分钟")
+        return ttl_minutes
+
+    import os
+
+    raw = (os.environ.get(ENV_PREVIEW_TTL) or "").strip()
+    if not raw:
+        return DEFAULT_TTL_MINUTES
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise PreviewError(
+            "INVALID_TTL", f"{ENV_PREVIEW_TTL}={raw!r} 必须是整数"
+        ) from exc
+    if value <= 0:
+        raise PreviewError("INVALID_TTL", f"{ENV_PREVIEW_TTL} 必须大于 0")
+    return value
+
+
+def _parse_dt(text: str | None) -> datetime | None:
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=clock.get_timezone())
+    return parsed
+
+
+def _blocks(items: list[dict]) -> list[dict]:
+    """把时间块规整成可比较的形式（按开始时间排序）。"""
+    return sorted(
+        (
+            {"start_at": item["start_at"], "end_at": item["end_at"]}
+            for item in items
+        ),
+        key=lambda block: (block["start_at"], block["end_at"]),
+    )
+
+
+# ---------------------------------------------------------------- 读取正式数据
+def _load_user(conn: sqlite3.Connection, user_id: str) -> sqlite3.Row:
+    row = conn.execute(
+        "SELECT id, name FROM users WHERE id = ?", (user_id,)
+    ).fetchone()
+    if row is None:
+        raise PreviewError("USER_NOT_FOUND", f"用户 {user_id!r} 不存在")
+    return row
+
+
+def _load_current_plan(conn: sqlite3.Connection, user_id: str) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT id, goal_id, status, version, note, updated_at
+        FROM plans
+        WHERE user_id = ? AND status = 'confirmed'
+        ORDER BY version DESC, updated_at DESC
+        LIMIT 1
+        """,
+        (user_id,),
+    ).fetchone()
+
+
+def _load_plan_items(
+    conn: sqlite3.Connection, user_id: str, plan_id: str
+) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT pi.id, pi.start_at, pi.end_at, pi.title, pi.item_type,
+               pi.task_id, pi.is_locked, t.status AS task_status
+        FROM plan_items pi
+        JOIN plans p ON p.id = pi.plan_id AND p.user_id = ?
+        LEFT JOIN tasks t ON t.id = pi.task_id AND t.user_id = p.user_id
+        WHERE pi.plan_id = ?
+        ORDER BY pi.start_at, pi.id
+        """,
+        (user_id, plan_id),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _old_plan_snapshot(plan: sqlite3.Row | None, items: list[dict]) -> dict | None:
+    if plan is None:
+        return None
+    return {
+        "id": plan["id"],
+        "version": plan["version"],
+        "status": plan["status"],
+        "note": plan["note"],
+        "items": [
+            {
+                "id": item["id"],
+                "start_at": item["start_at"],
+                "end_at": item["end_at"],
+                "title": item["title"],
+                "item_type": item["item_type"],
+                "task_id": item["task_id"],
+                "is_locked": bool(item["is_locked"]),
+            }
+            for item in items
+        ],
+    }
+
+
+# ---------------------------------------------------------------- 差异计算
+def _protection_of(item: dict, now: datetime) -> str | None:
+    """返回保护原因；None 表示这块可以参与重排。"""
+    if item["item_type"] in ("course", "exam"):
+        return "fixed_event"
+    if item["is_locked"]:
+        return "locked"
+    if item["task_status"] == "done":
+        return "task_done"
+    start = _parse_dt(item["start_at"])
+    if start is not None and start <= now:
+        return "started"
+    return None
+
+
+def build_diff(
+    old_items: list[dict],
+    new_items: list[dict],
+    now: datetime,
+) -> dict:
+    """比较正式计划与候选排程。
+
+    匹配键优先用 task_id（稳定），不用标题——标题可能重复或改写。
+    没有 task_id 的时间块（课程、考试、自定义）不算本次重排范围，原样保留。
+    """
+    diff: dict[str, list[dict]] = {
+        "added": [],
+        "removed": [],
+        "changed": [],
+        "kept": [],
+    }
+
+    old_by_task: dict[str, list[dict]] = {}
+    for item in old_items:
+        task_id = item.get("task_id")
+        if task_id:
+            old_by_task.setdefault(task_id, []).append(item)
+        else:
+            diff["kept"].append(
+                {
+                    "task_id": None,
+                    "title": item["title"],
+                    "item_type": item["item_type"],
+                    "reason": "not_in_scope",
+                    "blocks": _blocks([item]),
+                }
+            )
+
+    new_by_task: dict[str, list[dict]] = {}
+    for item in new_items:
+        new_by_task.setdefault(item["task_id"], []).append(
+            {"start_at": item["start_at"], "end_at": item["end_at"]}
+        )
+
+    for task_id in sorted(old_by_task):
+        items = old_by_task[task_id]
+        title = items[0]["title"]
+
+        reasons = [_protection_of(item, now) for item in items]
+        blocking = next((reason for reason in reasons if reason), None)
+        if blocking:
+            diff["kept"].append(
+                {
+                    "task_id": task_id,
+                    "title": title,
+                    "reason": blocking,
+                    "blocks": _blocks(items),
+                }
+            )
+            continue
+
+        if task_id not in new_by_task:
+            diff["removed"].append(
+                {
+                    "task_id": task_id,
+                    "title": title,
+                    "blocks": _blocks(items),
+                }
+            )
+            continue
+
+        before = _blocks(items)
+        after = sorted(
+            new_by_task[task_id], key=lambda b: (b["start_at"], b["end_at"])
+        )
+        if before == after:
+            diff["kept"].append(
+                {"task_id": task_id, "title": title, "reason": "unchanged",
+                 "blocks": before}
+            )
+        else:
+            diff["changed"].append(
+                {
+                    "task_id": task_id,
+                    "title": title,
+                    "before": before,
+                    "after": after,
+                }
+            )
+
+    for task_id in sorted(new_by_task):
+        if task_id in old_by_task:
+            continue
+        diff["added"].append(
+            {
+                "task_id": task_id,
+                "title": next(
+                    (
+                        item["title"]
+                        for item in new_items
+                        if item["task_id"] == task_id
+                    ),
+                    task_id,
+                ),
+                "blocks": sorted(
+                    new_by_task[task_id],
+                    key=lambda b: (b["start_at"], b["end_at"]),
+                ),
+            }
+        )
+
+    return diff
+
+
+# ---------------------------------------------------------------- 预览存取
+def _next_confirm_code(conn: sqlite3.Connection, user_id: str) -> str:
+    rows = conn.execute(
+        "SELECT confirm_code FROM previews WHERE user_id = ?", (user_id,)
+    ).fetchall()
+    highest = 0
+    for row in rows:
+        code = (row["confirm_code"] or "").lstrip("T")
+        if code.isdigit():
+            highest = max(highest, int(code))
+    return f"T{highest + 1:02d}"
+
+
+def _load_preview_row(
+    conn: sqlite3.Connection, user_id: str, preview_id: str
+) -> sqlite3.Row:
+    row = conn.execute(
+        "SELECT * FROM previews WHERE id = ? AND user_id = ?",
+        (preview_id, user_id),
+    ).fetchone()
+    if row is None:
+        raise PreviewError("PREVIEW_NOT_FOUND", "预览不存在或不属于当前用户")
+    return row
+
+
+def _find_reusable(
+    conn: sqlite3.Connection,
+    user_id: str,
+    goal_id: str,
+    base_plan_id: str | None,
+    base_version: int,
+    diff_json: str,
+    now: datetime,
+) -> sqlite3.Row | None:
+    """同样的基础版本 + 同样的差异 → 复用已有草稿，避免重复刷编号。"""
+    rows = conn.execute(
+        """
+        SELECT * FROM previews
+        WHERE user_id = ? AND goal_id = ? AND status = 'pending'
+          AND base_version = ? AND base_plan_id IS ?
+        ORDER BY created_at DESC
+        """,
+        (user_id, goal_id, base_version, base_plan_id),
+    ).fetchall()
+    for row in rows:
+        expires = _parse_dt(row["expires_at"])
+        if expires is not None and expires <= now:
+            continue
+        if row["diff_json"] == diff_json:
+            return row
+    return None
+
+
+def _effective_status(row: sqlite3.Row, now: datetime) -> str:
+    """把"已过期但还没被标记"的 pending 显示成 expired（不改库）。"""
+    if row["status"] != "pending":
+        return row["status"]
+    expires = _parse_dt(row["expires_at"])
+    if expires is not None and expires <= now:
+        return "expired"
+    return "pending"
+
+
+def _render(row: sqlite3.Row, now: datetime, reused: bool = False) -> dict:
+    capacity = json.loads(row["capacity_json"] or "{}")
+    diff = json.loads(row["diff_json"] or "{}")
+    return {
+        "preview_id": row["id"],
+        "confirm_code": row["confirm_code"],
+        "kind": row["kind"],
+        "status": _effective_status(row, now),
+        "base_plan_id": row["base_plan_id"],
+        "base_version": row["base_version"],
+        "created_at": row["created_at"],
+        "expires_at": row["expires_at"],
+        "confirmed_at": row["confirmed_at"],
+        "exam": capacity.get("exam"),
+        "old_plan": capacity.get("old_plan"),
+        "new_schedule": {
+            "windows": capacity.get("windows", []),
+            "schedule_items": capacity.get("schedule_items", []),
+        },
+        "diff": diff,
+        "summary": capacity.get("summary", {}),
+        "warnings": capacity.get("warnings", []),
+        "notes": capacity.get("notes", []),
+        "explanation": capacity.get("explanation", ""),
+        "reused": reused,
+    }
+
+
+def _build_summary_text(diff: dict, summary: dict, exam: dict) -> str:
+    counts = (
+        f"新增 {len(diff.get('added', []))} 块、"
+        f"移除 {len(diff.get('removed', []))} 块、"
+        f"调整 {len(diff.get('changed', []))} 块、"
+        f"保留 {len(diff.get('kept', []))} 块"
+    )
+    gaps = (
+        f"必做缺口 {summary.get('required_gap_minutes', 0)} 分钟，"
+        f"选做未排 {summary.get('unscheduled_optional_minutes', 0)} 分钟"
+    )
+    return f"考试「{exam.get('name', '')}」调整后的计划：{counts}；{gaps}。"
+
+
+# ---------------------------------------------------------------- 对外：创建
+def create_preview(
+    user_id: str,
+    exam_id: str,
+    *,
+    conn: sqlite3.Connection | None = None,
+    ttl_minutes: int | None = None,
+) -> dict:
+    """生成（或复用）一条待确认的排程预览。
+
+    参数：
+        user_id      可信身份里的用户 ID
+        exam_id      要重排的考试（必须属于该用户）
+        ttl_minutes  有效期，默认读 UNIPULSE_PREVIEW_TTL_MINUTES，再默认 30 分钟
+
+    返回：预览详情（见 docs/PREVIEW.md）
+    """
+    now = clock.get_now()
+    ttl = get_ttl_minutes(ttl_minutes)
+
+    with _connection(conn) as db:
+        _load_user(db, user_id)
+
+        # 排程本身只读；这里复用同一个连接
+        schedule = scheduler.generate_schedule(user_id, exam_id, conn=db)
+
+        plan = _load_current_plan(db, user_id)
+        old_items = _load_plan_items(db, user_id, plan["id"]) if plan else []
+        base_plan_id = plan["id"] if plan else None
+        base_version = int(plan["version"]) if plan else 0
+
+        diff = build_diff(old_items, schedule["schedule_items"], now)
+        summary_numbers = {
+            "required_minutes": schedule["required_minutes"],
+            "scheduled_required_minutes": schedule["scheduled_required_minutes"],
+            "required_gap_minutes": schedule["required_gap_minutes"],
+            "optional_minutes": schedule["optional_minutes"],
+            "scheduled_optional_minutes": schedule["scheduled_optional_minutes"],
+            "unscheduled_optional_minutes": schedule["unscheduled_optional_minutes"],
+            "total_requested_minutes": schedule["total_requested_minutes"],
+        }
+
+        notes = [NOTE_WINDOW_SOURCE, NOTE_NOT_COMMITTED]
+        if schedule["required_gap_minutes"] > 0:
+            notes.append(
+                f"必做任务还差 {schedule['required_gap_minutes']} 分钟，"
+                "需要用户补充可用时间或调整复习范围。"
+            )
+
+        capacity_json = json.dumps(
+            {
+                "exam": schedule["exam"],
+                "old_plan": _old_plan_snapshot(plan, old_items),
+                "windows": schedule["windows"],
+                "schedule_items": schedule["schedule_items"],
+                "summary": summary_numbers,
+                "warnings": schedule["warnings"],
+                "explanation": schedule["explanation"],
+                "notes": notes,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        diff_json = json.dumps(diff, ensure_ascii=False, sort_keys=True)
+
+        reusable = _find_reusable(
+            db, user_id, schedule["goal_id"], base_plan_id, base_version,
+            diff_json, now,
+        )
+        if reusable is not None:
+            return _render(reusable, now, reused=True)
+
+        preview_id = f"pv_{secrets.token_hex(6)}"
+        confirm_code = _next_confirm_code(db, user_id)
+        summary_text = _build_summary_text(diff, summary_numbers, schedule["exam"])
+        expires_at = (now + timedelta(minutes=ttl)).isoformat()
+
+        with db:                              # 单事务：写入 + 回读校验
+            db.execute(
+                """
+                INSERT INTO previews (id, user_id, goal_id, kind, confirm_code,
+                                      status, base_plan_id, base_version, summary,
+                                      diff_json, capacity_json, expires_at)
+                VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    preview_id,
+                    user_id,
+                    schedule["goal_id"],
+                    "initial_plan" if plan is None else "reschedule",
+                    confirm_code,
+                    base_plan_id,
+                    base_version,
+                    summary_text,
+                    diff_json,
+                    capacity_json,
+                    expires_at,
+                ),
+            )
+            # 回读：确保真的写进去了；这一步失败会触发整体回滚
+            stored = _load_preview_row(db, user_id, preview_id)
+
+        return _render(stored, now)
+
+
+# ---------------------------------------------------------------- 对外：读取
+def get_preview(user_id: str, preview_id: str, *, conn=None) -> dict:
+    """读取一条预览（只读）。过期会显示为 expired，但不改库。"""
+    now = clock.get_now()
+    with _connection(conn) as db:
+        row = _load_preview_row(db, user_id, preview_id)
+    return _render(row, now)
+
+
+def cancel_preview(user_id: str, preview_id: str, *, conn=None) -> dict:
+    """取消一条待确认预览。只能取消 pending 的。"""
+    now = clock.get_now()
+    with _connection(conn) as db:
+        row = _load_preview_row(db, user_id, preview_id)
+        status = _effective_status(row, now)
+        if status != "pending":
+            raise PreviewError(
+                "PREVIEW_NOT_PENDING", f"预览当前状态是 {status}，不能取消"
+            )
+        with db:
+            db.execute(
+                "UPDATE previews SET status = 'cancelled' "
+                "WHERE id = ? AND user_id = ? AND status = 'pending'",
+                (preview_id, user_id),
+            )
+        row = _load_preview_row(db, user_id, preview_id)
+    return _render(row, now)
+
+
+# ---------------------------------------------------------------- 对外：确认前校验
+def assert_confirmable(
+    user_id: str,
+    preview_id: str | None = None,
+    confirm_code: str | None = None,
+    *,
+    conn=None,
+) -> dict:
+    """确认流程在写入之前调用它：检查归属、状态、有效期、版本。
+
+    本轮只做校验，不写正式计划。返回可直接展示的预览详情。
+    """
+    if not preview_id and not confirm_code:
+        raise PreviewError("INVALID_ARGUMENT", "必须提供 preview_id 或 confirm_code")
+
+    now = clock.get_now()
+    with _connection(conn) as db:
+        if preview_id:
+            row = _load_preview_row(db, user_id, preview_id)
+        else:
+            row = db.execute(
+                """
+                SELECT * FROM previews
+                WHERE user_id = ? AND confirm_code = ?
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (user_id, confirm_code),
+            ).fetchone()
+            if row is None:
+                raise PreviewError("PREVIEW_NOT_FOUND", "预览不存在或不属于当前用户")
+
+        status = _effective_status(row, now)
+        if status == "expired":
+            raise PreviewError("PREVIEW_EXPIRED", "预览已过期，请重新生成")
+        if status != "pending":
+            raise PreviewError(
+                "PREVIEW_NOT_PENDING", f"预览当前状态是 {status}，不能确认"
+            )
+
+        plan = _load_current_plan(db, user_id)
+        current_version = int(plan["version"]) if plan else 0
+        current_id = plan["id"] if plan else None
+        if current_id != row["base_plan_id"] or current_version != row["base_version"]:
+            raise PreviewError(
+                "VERSION_CONFLICT",
+                "正式计划已经变化（当前版本 "
+                f"{current_version}，预览基于 {row['base_version']}），请重新生成预览",
+            )
+
+        rendered = _render(row, now)
+    rendered["confirmable"] = True
+    return rendered
