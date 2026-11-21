@@ -750,6 +750,46 @@ HTTP 状态码与 `code` 对应关系见第 6 节。
 
 ---
 
+### 5.12 `/v1/*` 兼容接口（给成员 C 的网页）
+
+C 的页面按 `GET /v1/workspace` + `{ok:true,data}` 信封实现，为了让**已有页面不改**就能连真实后端，
+B 增加一层薄适配。它不重复业务逻辑：全部调用 `services/`，并且与 `/api/v1/*` 共用同一套 Token 与用户隔离。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/v1/workspace` | 工作台数据（version/profile/goals/events/classes/tasks/study_blocks/plans/reminders/notices/pending/activity） |
+| POST | `/v1/previews` | 按**新考试时间**生成改期预览 |
+| GET | `/v1/previews/{preview_id}` | 预览详情 |
+| POST | `/v1/actions/{preview_id}/confirm` | 确认并提交（同一事务更新考试、计划、提醒） |
+| POST | `/v1/actions/{preview_id}/cancel` | 取消草稿 |
+
+**语义映射：** C 的 `event` = B 的 `exam`（一场考试事件）；C 的 `action` = B 的 `preview`（同一张 `previews` 表）。
+
+**请求体（创建预览）：**
+
+```json
+{
+  "event_id": "ex_demo_ml_final",
+  "new_start": "2026-12-02T14:00:00+08:00",
+  "expected_version": 1,
+  "source_notice_ids": ["nt_demo"]
+}
+```
+
+**响应信封：**
+
+```json
+{ "ok": true, "data": { ... } }
+{ "ok": false, "error": { "code": "VERSION_CONFLICT", "message": "..." } }
+```
+
+**确认接口的差异（需要注意）：**
+
+- `/v1/actions/{id}/confirm` 允许**不传** `confirm_code`：C 当前只发 `{}`，兼容层会读取预览自带的确认码。
+- `/api/v1/previews/{id}/confirm` 仍然**强制要求** `confirm_code`，两套入口的安全等级不同，这是为兼容 C 现状的临时取舍，待 C 改成带上确认码后可统一。
+
+---
+
 ## 6. 错误码
 
 ### 6.1 错误码总表
@@ -872,5 +912,6 @@ V4 硬性要求：「网页校验访问者与企微用户的绑定关系，不�
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | v0.1 | 2026-11-20 | 初稿：按 V4 第 3 节定义 A/B/C 三个角色、7 个服务函数、9 个 HTTP 接口、8 个错误码 |
+| v0.4 | 2026-11-21 | 增加 `/v1/*` 兼容接口（workspace、改期预览、确认/取消）；改期预览携带 `proposed_exam`，确认时同事务更新考试时间 |
 | v0.3 | 2026-11-21 | 预览确认落地：新增 `/previews/{id}` 读取、`/confirm`、`/cancel`；confirm 必须带 `confirm_code`（服务端强校验）；补充 404/409/422 的细分错误码 |
 | v0.2 | 2026-11-20 | 只读查询落地：`get_context` 增加 `time_mode` / `plan` / `plan_items`；`Dashboard` 增加 `today` / `time_mode` / `days[].weekday` / `items[].location` / `items[].ref_id` / `next_class.session_id`；所有时间字段统一为带时区 ISO；`missing.reason` 补全枚举 |

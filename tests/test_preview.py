@@ -701,3 +701,101 @@ def test_confirm_cancels_related_reminders_only(conn):
     rows = {row["id"]: row["status"] for row in conn.execute("SELECT id, status FROM reminders")}
     assert rows["rm_old"] == "cancelled"
     assert rows["rm_other"] == "queued"
+
+
+# ---------------------------------------------------------------- 改期预览与确认
+def test_exam_change_preview_does_not_write_exam(conn):
+    detail = preview.create_exam_change_preview(
+        seed_module.DEMO_USER_ID,
+        seed_module.EXAM_ID,
+        "2026-12-02T14:00:00+08:00",
+        conn=conn,
+    )
+
+    assert detail["proposed_exam"]["new_start_at"] == "2026-12-02T14:00:00+08:00"
+    assert detail["proposed_exam"]["old_start_at"] == "2026-12-04T14:00:00+08:00"
+    # 只生成草稿：考试和计划都没变
+    exam = conn.execute(
+        "SELECT exam_date, version FROM exams WHERE id = ?", (seed_module.EXAM_ID,)
+    ).fetchone()
+    assert exam["exam_date"] == "2026-12-04"
+    assert exam["version"] == 1
+    assert _confirmed_plan(conn, seed_module.DEMO_USER_ID)["version"] == 1
+
+
+def test_exam_change_confirm_applies_exam_and_plan(conn):
+    detail = preview.create_exam_change_preview(
+        seed_module.DEMO_USER_ID, seed_module.EXAM_ID, "2026-12-02T14:00:00+08:00",
+        conn=conn,
+    )
+    result = preview.confirm_preview(
+        seed_module.DEMO_USER_ID, detail["preview_id"], detail["confirm_code"], conn=conn
+    )
+
+    assert result["applied"]["exam"]["new_start_at"] == "2026-12-02T14:00:00+08:00"
+    exam = conn.execute(
+        "SELECT exam_date, start_time, version, status FROM exams WHERE id = ?",
+        (seed_module.EXAM_ID,),
+    ).fetchone()
+    assert (exam["exam_date"], exam["start_time"]) == ("2026-12-02", "14:00")
+    assert exam["version"] == 2
+    assert exam["status"] == "moved"
+
+    plan = _confirmed_plan(conn, seed_module.DEMO_USER_ID)
+    assert plan["version"] == 2
+    assert len(_plan_items(conn, plan["id"])) == 2
+
+
+def test_exam_change_confirm_is_idempotent(conn):
+    detail = preview.create_exam_change_preview(
+        seed_module.DEMO_USER_ID, seed_module.EXAM_ID, "2026-12-02T14:00:00+08:00",
+        conn=conn,
+    )
+    preview.confirm_preview(
+        seed_module.DEMO_USER_ID, detail["preview_id"], detail["confirm_code"], conn=conn
+    )
+    again = preview.confirm_preview(
+        seed_module.DEMO_USER_ID, detail["preview_id"], detail["confirm_code"], conn=conn
+    )
+
+    assert again["duplicate"] is True
+    exam = conn.execute(
+        "SELECT version FROM exams WHERE id = ?", (seed_module.EXAM_ID,)
+    ).fetchone()
+    assert exam["version"] == 2          # 没有重复 +1
+    assert len(conn.execute("SELECT id FROM plans").fetchall()) == 2
+
+
+def test_exam_change_conflicts(conn):
+    detail = preview.create_exam_change_preview(
+        seed_module.DEMO_USER_ID, seed_module.EXAM_ID, "2026-12-02T14:00:00+08:00",
+        conn=conn,
+    )
+    # 预览生成后考试被别人改了
+    with conn:
+        conn.execute(
+            "UPDATE exams SET version = version + 1 WHERE id = ?", (seed_module.EXAM_ID,)
+        )
+
+    with pytest.raises(PreviewError) as excinfo:
+        preview.confirm_preview(
+            seed_module.DEMO_USER_ID, detail["preview_id"], detail["confirm_code"],
+            conn=conn,
+        )
+    assert excinfo.value.code == "EXAM_VERSION_CONFLICT"
+
+
+def test_exam_change_rejects_same_or_past_time(conn):
+    with pytest.raises(PreviewError) as excinfo:
+        preview.create_exam_change_preview(
+            seed_module.DEMO_USER_ID, seed_module.EXAM_ID, "2026-12-04T14:00:00+08:00",
+            conn=conn,
+        )
+    assert excinfo.value.code == "EXAM_TIME_UNCHANGED"
+
+    with pytest.raises(PreviewError) as excinfo:
+        preview.create_exam_change_preview(
+            seed_module.DEMO_USER_ID, seed_module.EXAM_ID, "2026-11-01T14:00:00+08:00",
+            conn=conn,
+        )
+    assert excinfo.value.code == "INVALID_EXAM_TIME"

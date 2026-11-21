@@ -22,7 +22,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from api import auth
+from api import auth, compat
 from database.connection import DB_PATH, init_db
 from services import clock, preview, queries
 
@@ -92,9 +92,26 @@ app = FastAPI(
 )
 
 
+app.include_router(compat.router)
+
+
 # ---------------------------------------------------------------- 统一错误处理
+def _is_compat_path(request: Request) -> bool:
+    """C 的 /v1/* 用 {ok:false,error} 信封；原有 /api/v1/* 保持裸错误格式。"""
+    return request.url.path.startswith("/v1/")
+
+
+def _compat_error(status_code: int, code: str, message: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"ok": False, "error": {"code": code, "message": message}},
+    )
+
+
 @app.exception_handler(auth.AuthError)
 async def _handle_auth_error(request: Request, exc: auth.AuthError) -> JSONResponse:
+    if _is_compat_path(request):
+        return _compat_error(401, exc.code, exc.message)
     return _error(401, exc.code, exc.message, {"reason": exc.reason})
 
 
@@ -119,6 +136,8 @@ async def _handle_preview_error(
 async def _handle_user_not_found(
     request: Request, exc: queries.UserNotFoundError
 ) -> JSONResponse:
+    if _is_compat_path(request):
+        return _compat_error(404, "USER_NOT_FOUND", "用户不存在或已失效")
     return _error(404, "NOT_FOUND", "用户不存在或已失效", {"reason": "USER_NOT_FOUND"})
 
 
@@ -126,6 +145,8 @@ async def _handle_user_not_found(
 async def _handle_query_error(
     request: Request, exc: queries.QueryError
 ) -> JSONResponse:
+    if _is_compat_path(request):
+        return _compat_error(422, "VALIDATION_ERROR", str(exc))
     return _error(422, "VALIDATION_ERROR", str(exc))
 
 
@@ -138,6 +159,8 @@ async def _handle_validation_error(
         {"field": ".".join(str(p) for p in err.get("loc", [])), "reason": err.get("msg", "")}
         for err in exc.errors()
     ]
+    if _is_compat_path(request):
+        return _compat_error(422, "VALIDATION_ERROR", "请求参数不合法")
     return _error(422, "VALIDATION_ERROR", "请求参数不合法", {"fields": fields})
 
 

@@ -305,15 +305,33 @@ COMMIT
 - **不新建提醒**（提醒排期逻辑还没做，P1）
 - 失效与计划写入在同一个事务里，不会出现"提醒取消了但计划没更新"
 
-### 10.6 限制
+### 10.6 改期预览（exam_update）
 
-1. **确认不会修改考试时间**：`previews` 没有存"新考试时间"的字段，
-   当前流程假设考试日期已经在别处更新（演示/测试里是直接改 `exams`）。
-   如果要支持"贴通知 → 确认 → 考试时间一起更新"，需要让预览携带 `exam_update`，
-   这是下一步要定的接口（见 REPORT / 待确认）。
-2. **已开始的时间块会被保留，但对应任务可能被重新排到别处**：`tasks` 表没有"进行中"状态，
+```python
+create_exam_change_preview(user_id, exam_id, new_start, *,
+                           expected_version=None, notice_id=None,
+                           conn=None, ttl_minutes=None)
+```
+
+- 排程按**拟议的新考试时间**计算（`scheduler.generate_schedule(exam_start_override=...)`）
+- 预览里存 `proposed_exam`：旧时间、新时间、新结束时间、考试当时的 version、来源通知
+- **此时考试时间与正式计划都没变**
+
+确认时在同一事务里先做：
+
+1. 校验考试 `version` 仍等于预览记录的 `exam_version`（否则 `EXAM_VERSION_CONFLICT`）
+2. 校验新时间仍晚于当前时间（否则 `PREVIEW_EXPIRED`）
+3. `UPDATE exams`：日期/起止时间、`version+1`、`status='moved'`、来源通知
+4. 再建新计划、写时间块、失效提醒、标记预览已确认
+
+重复确认返回第一次结果，**不会**再次递增考试版本。
+
+### 10.7 限制
+
+1. **已开始的时间块会被保留，但对应任务可能被重新排到别处**：`tasks` 表没有"进行中"状态，
    无法判断任务已完成多少。这是 schema 限制，没有擅自推断。
-3. **不新建提醒**：`reminders` 只有失效逻辑。
+2. **不新建提醒**：`reminders` 只有失效逻辑。
+3. 改期预览的窗口仍只来自当前计划的可移动块（T11），不会寻找计划外空档。
 
 ## 11. 下一步
 

@@ -391,6 +391,7 @@ def _render(row: sqlite3.Row, now: datetime, reused: bool = False) -> dict:
         "notes": capacity.get("notes", []),
         "explanation": capacity.get("explanation", ""),
         "applied": capacity.get("applied"),
+        "proposed_exam": capacity.get("proposed_exam"),
         "reused": reused,
     }
 
@@ -407,6 +408,47 @@ def _build_summary_text(diff: dict, summary: dict, exam: dict) -> str:
         f"选做未排 {summary.get('unscheduled_optional_minutes', 0)} 分钟"
     )
     return f"考试「{exam.get('name', '')}」调整后的计划：{counts}；{gaps}。"
+
+
+def _store_preview(
+    db: sqlite3.Connection,
+    *,
+    user_id: str,
+    goal_id: str | None,
+    kind: str,
+    base_plan_id: str | None,
+    base_version: int,
+    summary_text: str,
+    diff_json: str,
+    capacity_json: str,
+    expires_at: str,
+) -> sqlite3.Row:
+    """分配确认码并写入预览；写入后回读，失败则整体回滚。"""
+    preview_id = f"pv_{secrets.token_hex(6)}"
+    confirm_code = _next_confirm_code(db, user_id)
+    with db:
+        db.execute(
+            """
+            INSERT INTO previews (id, user_id, goal_id, kind, confirm_code,
+                                  status, base_plan_id, base_version, summary,
+                                  diff_json, capacity_json, expires_at)
+            VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                preview_id,
+                user_id,
+                goal_id,
+                kind,
+                confirm_code,
+                base_plan_id,
+                base_version,
+                summary_text,
+                diff_json,
+                capacity_json,
+                expires_at,
+            ),
+        )
+        return _load_preview_row(db, user_id, preview_id)
 
 
 # ---------------------------------------------------------------- 对外：创建
@@ -481,36 +523,157 @@ def create_preview(
         if reusable is not None:
             return _render(reusable, now, reused=True)
 
-        preview_id = f"pv_{secrets.token_hex(6)}"
-        confirm_code = _next_confirm_code(db, user_id)
         summary_text = _build_summary_text(diff, summary_numbers, schedule["exam"])
-        expires_at = (now + timedelta(minutes=ttl)).isoformat()
+        stored = _store_preview(
+            db,
+            user_id=user_id,
+            goal_id=schedule["goal_id"],
+            kind="initial_plan" if plan is None else "reschedule",
+            base_plan_id=base_plan_id,
+            base_version=base_version,
+            summary_text=summary_text,
+            diff_json=diff_json,
+            capacity_json=capacity_json,
+            expires_at=(now + timedelta(minutes=ttl)).isoformat(),
+        )
+        return _render(stored, now)
 
-        with db:                              # 单事务：写入 + 回读校验
-            db.execute(
-                """
-                INSERT INTO previews (id, user_id, goal_id, kind, confirm_code,
-                                      status, base_plan_id, base_version, summary,
-                                      diff_json, capacity_json, expires_at)
-                VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    preview_id,
-                    user_id,
-                    schedule["goal_id"],
-                    "initial_plan" if plan is None else "reschedule",
-                    confirm_code,
-                    base_plan_id,
-                    base_version,
-                    summary_text,
-                    diff_json,
-                    capacity_json,
-                    expires_at,
-                ),
+
+def _exam_start_of(exam: sqlite3.Row) -> datetime | None:
+    if not exam["start_time"]:
+        return None
+    try:
+        return datetime.fromisoformat(
+            f"{exam['exam_date']}T{exam['start_time']}"
+        ).replace(tzinfo=clock.get_timezone())
+    except ValueError:
+        return None
+
+
+def create_exam_change_preview(
+    user_id: str,
+    exam_id: str,
+    new_start: str | datetime,
+    *,
+    expected_version: int | None = None,
+    notice_id: str | None = None,
+    conn: sqlite3.Connection | None = None,
+    ttl_minutes: int | None = None,
+) -> dict:
+    """按「拟议的新考试时间」生成预览（只读，改考试时间要等确认）。
+
+    这是给网页的"改期预览"用的：排程按新时间计算，但 exams 表不动。
+    确认时（confirm_preview）才会在同一个事务里更新考试时间。
+    """
+    now = clock.get_now()
+    ttl = get_ttl_minutes(ttl_minutes)
+
+    proposed_start = _parse_dt(new_start) if isinstance(new_start, str) else new_start
+    if proposed_start is None:
+        raise PreviewError("INVALID_EXAM_TIME", "新的考试时间格式不正确，需要带时区的 ISO 8601")
+    if proposed_start.tzinfo is None:
+        raise PreviewError("INVALID_EXAM_TIME", "新的考试时间必须带时区")
+    if proposed_start <= now:
+        raise PreviewError("INVALID_EXAM_TIME", "新的考试时间必须晚于当前时间")
+
+    with _connection(conn) as db:
+        _load_user(db, user_id)
+        exam = db.execute(
+            "SELECT id, user_id, name, exam_date, start_time, end_time, version, "
+            "source_notice_id FROM exams WHERE id = ? AND user_id = ?",
+            (exam_id, user_id),
+        ).fetchone()
+        if exam is None:
+            raise scheduler.SchedulerError(
+                "EXAM_NOT_FOUND", f"用户 {user_id!r} 名下没有考试 {exam_id!r}"
             )
-            # 回读：确保真的写进去了；这一步失败会触发整体回滚
-            stored = _load_preview_row(db, user_id, preview_id)
 
+        current_start = _exam_start_of(exam)
+        if current_start is not None and proposed_start == current_start:
+            raise PreviewError("EXAM_TIME_UNCHANGED", "考试时间没有变化，不需要生成预览")
+
+        plan = _load_current_plan(db, user_id)
+        base_version = int(plan["version"]) if plan else 0
+        if expected_version is not None and int(expected_version) != base_version:
+            raise PreviewError(
+                "VERSION_CONFLICT",
+                f"你看到的版本是 {expected_version}，当前正式计划是 v{base_version}，请刷新",
+            )
+
+        schedule = scheduler.generate_schedule(
+            user_id, exam_id, conn=db, exam_start_override=proposed_start
+        )
+        old_items = _load_plan_items(db, user_id, plan["id"]) if plan else []
+        diff = build_diff(old_items, schedule["schedule_items"], now)
+
+        summary_numbers = {
+            "required_minutes": schedule["required_minutes"],
+            "scheduled_required_minutes": schedule["scheduled_required_minutes"],
+            "required_gap_minutes": schedule["required_gap_minutes"],
+            "optional_minutes": schedule["optional_minutes"],
+            "scheduled_optional_minutes": schedule["scheduled_optional_minutes"],
+            "unscheduled_optional_minutes": schedule["unscheduled_optional_minutes"],
+            "total_requested_minutes": schedule["total_requested_minutes"],
+        }
+
+        proposed = {
+            "exam_id": exam_id,
+            "exam_version": int(exam["version"]),
+            "old_start_at": current_start.isoformat() if current_start else None,
+            "new_start_at": proposed_start.isoformat(),
+            "new_end_at": schedule["exam"]["end_at"],
+            "source_notice_id": notice_id,
+        }
+
+        notes = [
+            NOTE_WINDOW_SOURCE,
+            "这是待确认草稿：考试时间与正式计划都还没改，确认后才会一起生效。",
+        ]
+        if schedule["required_gap_minutes"] > 0:
+            notes.append(
+                f"必做任务还差 {schedule['required_gap_minutes']} 分钟，"
+                "需要用户补充可用时间或调整复习范围。"
+            )
+
+        capacity_json = json.dumps(
+            {
+                "exam": schedule["exam"],
+                "proposed_exam": proposed,
+                "old_plan": _old_plan_snapshot(plan, old_items),
+                "windows": schedule["windows"],
+                "schedule_items": schedule["schedule_items"],
+                "summary": summary_numbers,
+                "warnings": schedule["warnings"],
+                "explanation": schedule["explanation"],
+                "notes": notes,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        diff_json = json.dumps(diff, ensure_ascii=False, sort_keys=True)
+
+        counts = (
+            f"新增 {len(diff['added'])} 块、移除 {len(diff['removed'])} 块、"
+            f"调整 {len(diff['changed'])} 块、保留 {len(diff['kept'])} 块"
+        )
+        summary_text = (
+            f"考试「{exam['name']}」改期预览：{counts}；"
+            f"必做缺口 {summary_numbers['required_gap_minutes']} 分钟，"
+            f"选做未排 {summary_numbers['unscheduled_optional_minutes']} 分钟。"
+        )
+
+        stored = _store_preview(
+            db,
+            user_id=user_id,
+            goal_id=schedule["goal_id"],
+            kind="reschedule",
+            base_plan_id=plan["id"] if plan else None,
+            base_version=base_version,
+            summary_text=summary_text,
+            diff_json=diff_json,
+            capacity_json=capacity_json,
+            expires_at=(now + timedelta(minutes=ttl)).isoformat(),
+        )
         return _render(stored, now)
 
 
@@ -849,6 +1012,51 @@ def confirm_preview(
                 raise PreviewError("PREVIEW_NOT_PENDING", "预览状态已变化，确认未生效")
             current_plan = _ensure_version(db, user_id, fresh)
 
+            proposed = capacity.get("proposed_exam")
+            exam_change = None
+            if proposed:
+                fresh_exam = db.execute(
+                    "SELECT id, version FROM exams WHERE id = ? AND user_id = ?",
+                    (proposed.get("exam_id"), user_id),
+                ).fetchone()
+                if fresh_exam is None:
+                    raise PreviewError("EXAM_NOT_FOUND", "预览对应的考试已不存在")
+                if int(fresh_exam["version"]) != int(proposed.get("exam_version", -1)):
+                    raise PreviewError(
+                        "EXAM_VERSION_CONFLICT",
+                        "考试信息已被修改，请重新生成预览",
+                    )
+                new_start = _parse_dt(proposed.get("new_start_at"))
+                new_end = _parse_dt(proposed.get("new_end_at"))
+                if new_start is None:
+                    raise PreviewError("INVALID_EXAM_TIME", "预览里的新考试时间无效")
+                if new_start <= now:
+                    raise PreviewError("PREVIEW_EXPIRED", "新的考试时间已经过去，请重新生成预览")
+                db.execute(
+                    """
+                    UPDATE exams
+                    SET exam_date = ?, start_time = ?, end_time = ?,
+                        version = version + 1, status = 'moved',
+                        source_notice_id = COALESCE(?, source_notice_id),
+                        updated_at = datetime('now', 'localtime')
+                    WHERE id = ? AND user_id = ?
+                    """,
+                    (
+                        new_start.date().isoformat(),
+                        new_start.strftime("%H:%M"),
+                        new_end.strftime("%H:%M") if new_end else None,
+                        proposed.get("source_notice_id"),
+                        proposed["exam_id"],
+                        user_id,
+                    ),
+                )
+                exam_change = {
+                    "exam_id": proposed["exam_id"],
+                    "old_start_at": proposed.get("old_start_at"),
+                    "new_start_at": proposed["new_start_at"],
+                    "exam_version": int(proposed.get("exam_version", 0)) + 1,
+                }
+
             new_version = (int(current_plan["version"]) if current_plan else 0) + 1
             new_plan_id = _new_id("pl")
 
@@ -880,6 +1088,7 @@ def confirm_preview(
                 "plan_version": new_version,
                 "items_written": items_written,
                 "reminders_cancelled": reminders_cancelled,
+                "exam": exam_change,
                 "confirmed_at": created_at,
             }
             _mark_confirmed(
@@ -918,6 +1127,7 @@ def confirm_preview(
                 "kept": diff.get("kept", []),
                 "added": diff.get("added", []),
                 "items_written": items_written,
+                "exam": exam_change,
                 "confirmed_at": created_at,
             },
             "reminders": {"cancelled": reminders_cancelled, "queued": 0},

@@ -248,6 +248,20 @@ def _exam_start(exam: sqlite3.Row) -> datetime:
     return start
 
 
+def _exam_end_with_override(
+    exam: sqlite3.Row, start: datetime, override: datetime | None
+) -> datetime:
+    """没有 override 时用库里的结束时间；有 override 时保持原考试时长。"""
+    if override is None:
+        end = _combine(exam["exam_date"], exam["end_time"])
+        return end if end and end > start else start
+    original_start = _combine(exam["exam_date"], exam["start_time"])
+    original_end = _combine(exam["exam_date"], exam["end_time"])
+    if original_start and original_end and original_end > original_start:
+        return start + (original_end - original_start)
+    return start
+
+
 def _merge(
     intervals: list[tuple[datetime, datetime]]
 ) -> list[tuple[datetime, datetime]]:
@@ -507,7 +521,11 @@ def _place_tasks(
 
 # ---------------------------------------------------------------- 对外入口
 def generate_schedule(
-    user_id: str, exam_id: str, *, conn: sqlite3.Connection | None = None
+    user_id: str,
+    exam_id: str,
+    *,
+    conn: sqlite3.Connection | None = None,
+    exam_start_override: datetime | None = None,
 ) -> dict:
     """为指定用户的指定考试生成学习安排（只读，不写库）。
 
@@ -518,7 +536,7 @@ def generate_schedule(
     with _connection(conn) as db:
         user = _load_user(db, user_id)
         exam = _load_exam(db, user_id, exam_id)
-        exam_start = _exam_start(exam)
+        exam_start = exam_start_override or _exam_start(exam)
         if exam_start <= now:
             raise SchedulerError(
                 "EXAM_IN_PAST",
@@ -639,7 +657,7 @@ def generate_schedule(
             "name": exam["name"],
             "exam_date": exam["exam_date"],
             "start_at": _iso(exam_start),
-            "end_at": _iso(_combine(exam["exam_date"], exam["end_time"]) or exam_start),
+            "end_at": _iso(_exam_end_with_override(exam, exam_start, exam_start_override)),
             "cutoff_at": _iso(exam_start),
         },
         "goal_id": goal["id"],

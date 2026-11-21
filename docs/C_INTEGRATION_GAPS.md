@@ -6,6 +6,37 @@
 
 ---
 
+## 0. 更新（2026-11-21）：已按兼容方案适配
+
+B 新增 `/v1/*` 兼容层（`api/compat.py` + `services/workspace.py`），C 的 `ApiClient` 需要的接口已全部可用：
+
+| C 调用 | 现在 | 内部实现 |
+|---|---|---|
+| `GET /v1/workspace` | ✅ | `services/workspace.py` 聚合真实数据 |
+| `POST /v1/previews` | ✅ | `preview.create_exam_change_preview()`（按新时间算，不改库） |
+| `GET /v1/previews/{id}` | ✅ | `preview.get_preview()` |
+| `POST /v1/actions/{id}/confirm` | ✅ | `preview.confirm_preview()`（同事务更新考试+计划+提醒） |
+| `POST /v1/actions/{id}/cancel` | ✅ | `preview.cancel_preview()` |
+| `POST /v1/goals`、`/classes`、`/tasks/*`、`/notices`、`/agent/messages` | ❌ 仍缺 | 写接口/Agent 不在首版范围 |
+
+**仍然缺的字段（没有数据来源，按约定返回空值）：**
+
+| C 字段 | 现状 |
+|---|---|
+| `goals.scope` / `goals.availability` | 表里没有，返回 `""` |
+| `tasks.version` | 表里没有，返回 `null` |
+| `tasks.included` | 恒为 `true`（无"移出范围"字段） |
+| `tasks.actual_minutes` | 由「预计 - 剩余」推导 |
+| `plans.event_version` | 用考试当前 version 代替 |
+| `reminders.event_id` | 无直接字段，返回 `null` |
+| `activity` | 无表，返回 `[]` |
+| `availability` | 无表（T11），返回 `[]` |
+
+**一个待统一的差异：** C 的确认按钮只发 `{}`，兼容层因此读取预览自带的确认码；
+`/api/v1` 仍然强制要求确认码。C 后续把 `confirm_code` 一起提交后，这个差异可以去掉。
+
+---
+
 ## 1. 事实
 
 | 项 | 情况 |

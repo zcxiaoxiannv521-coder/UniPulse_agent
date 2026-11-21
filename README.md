@@ -22,7 +22,9 @@
 | 第三阶段·排程 | 单门考试排程 `services/scheduler.py` | ✅ 完成（已接入预览） |
 | 第三阶段·预览 | 预览草稿 `services/preview.py` | ✅ 完成（已接 HTTP） |
 | 第三阶段·确认 | 确认提交 `confirm_preview`（单事务、幂等、保护旧块） | ✅ 完成 |
-| 第三阶段·待做 | 预览携带考试改期、提醒排期 | ⬜ 未开始 |
+| 第三阶段·改期 | 改期预览 + 确认时同事务更新考试 | ✅ 完成 |
+| 第三阶段·兼容 | `/v1/*` 兼容接口（workspace/预览/确认） | ✅ 完成 |
+| 第三阶段·待做 | 提醒排期、写接口（goals/classes/progress） | ⬜ 未开始 |
 | 第四阶段 | 企微接入（A）、看板（C）、联调 | ⬜ 未开始 |
 
 **现在仓库里没有排程算法、没有 Agent、没有企微代码。** 这是故意的——先把时间基准、演示数据、只读接口对齐，再写会改数据的逻辑。
@@ -36,7 +38,8 @@ unipulse/
 ├── agent/               # A：意图判断、工具调度、运行状态
 ├── integrations/        # A：企微接入、消息去重、身份注入
 ├── api/                 # B：HTTP 接口层（供 C 的网页调用）
-│   └── app.py           #   FastAPI 入口，目前只有 /health
+│   ├── app.py           #   FastAPI 入口 + /api/v1/*
+│   └── compat.py        #   /v1/* 兼容层（对齐 C 现有页面）
 ├── database/            # B：数据库
 │   ├── connection.py    #   连接工具 + 一键建库
 │   └── schema.sql       #   12 张表的建表脚本
@@ -44,7 +47,8 @@ unipulse/
 │   ├── clock.py         #   统一时间入口（real / demo 两种模式）
 │   ├── queries.py       #   只读查询（上下文 / 看板）
 │   ├── scheduler.py     #   单门考试排程（只读，不写库）
-│   └── preview.py       #   排程预览草稿（只写 previews，不改正式计划）
+│   ├── preview.py       #   排程预览草稿与确认提交（单事务）
+│   └── workspace.py     #   给 C 的 workspace 聚合（只读）
 ├── tests/               # B：测试
 │   ├── test_smoke.py    #   冒烟测试：建库、接口、连接
 │   ├── test_clock.py    #   时间模式、时区、错误配置、跨天
