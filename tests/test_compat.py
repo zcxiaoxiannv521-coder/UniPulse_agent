@@ -487,3 +487,234 @@ def test_notice_save_does_not_change_exam_or_plan(client, db_path):
     after = snapshot()
 
     assert before == after
+
+
+# ---------------------------------------------------------------- 任务进度与用时
+TASK_ID = "tk_demo_ch3"
+
+
+def test_task_progress_via_compat(client):
+    resp = client.post(
+        f"/v1/tasks/{TASK_ID}/progress",
+        json={
+            "payload": {
+                "status": "doing",
+                "remaining_minutes": 45,
+                "actual_minutes": 15,
+                "feedback": "还剩一半",
+            },
+            "expected_version": 1,
+        },
+        headers=_headers(),
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["data"]["task"]["remaining_minutes"] == 45
+    assert body["data"]["actual_minutes"] == 15
+
+    data = client.get("/v1/workspace", headers=_headers()).json()["data"]
+    task = next(t for t in data["tasks"] if t["id"] == TASK_ID)
+    assert task["remaining_minutes"] == 45
+    assert task["actual_minutes"] == 15
+    assert task["feedback"] == "还剩一半"
+    assert task["status"] == "doing"
+
+
+def test_task_done_via_compat(client):
+    resp = client.post(
+        f"/v1/tasks/{TASK_ID}/progress",
+        json={"payload": {"status": "done", "remaining_minutes": 0}},
+        headers=_headers(),
+    )
+
+    assert resp.status_code == 200
+    data = client.get("/v1/workspace", headers=_headers()).json()["data"]
+    task = next(t for t in data["tasks"] if t["id"] == TASK_ID)
+    assert task["status"] == "done"
+    assert task["remaining_minutes"] == 0
+
+
+def test_task_progress_requires_auth(client):
+    resp = client.post(
+        f"/v1/tasks/{TASK_ID}/progress",
+        json={"payload": {"status": "doing", "remaining_minutes": 30}},
+    )
+    assert resp.status_code == 401
+
+
+def test_task_progress_other_user_404(client, db_path):
+    conn = get_connection(db_path)
+    try:
+        with conn:
+            conn.execute("INSERT INTO users (id, name) VALUES ('us_other', '别人')")
+        token = auth.create_token("us_other")
+    finally:
+        conn.close()
+
+    resp = client.post(
+        f"/v1/tasks/{TASK_ID}/progress",
+        json={"payload": {"status": "doing", "remaining_minutes": 30}},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "TASK_NOT_FOUND"
+
+
+def test_task_progress_body_user_id_ignored(client, db_path):
+    resp = client.post(
+        f"/v1/tasks/{TASK_ID}/progress",
+        json={
+            "payload": {"status": "doing", "remaining_minutes": 20},
+            "user_id": "us_other",
+        },
+        headers=_headers(),
+    )
+    assert resp.status_code == 200
+
+    conn = get_connection(db_path)
+    try:
+        task = conn.execute(
+            "SELECT user_id, remaining_minutes FROM tasks WHERE id = ?", (TASK_ID,)
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert task["user_id"] == seed_module.DEMO_USER_ID
+    assert task["remaining_minutes"] == 20
+
+
+def test_task_progress_invalid_remaining(client):
+    resp = client.post(
+        f"/v1/tasks/{TASK_ID}/progress",
+        json={"payload": {"status": "doing", "remaining_minutes": 0}},
+        headers=_headers(),
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] in {"INVALID_REMAINING", "INVALID_ARGUMENT"}
+
+
+def test_task_cannot_reopen_done(client):
+    client.post(
+        f"/v1/tasks/{TASK_ID}/progress",
+        json={"payload": {"status": "done", "remaining_minutes": 0}},
+        headers=_headers(),
+    )
+
+    resp = client.post(
+        f"/v1/tasks/{TASK_ID}/progress",
+        json={"payload": {"status": "doing", "remaining_minutes": 30}},
+        headers=_headers(),
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "TASK_ALREADY_DONE"
+
+
+def test_task_time_does_not_change_remaining(client):
+    before = client.get("/v1/workspace", headers=_headers()).json()["data"]
+    before_task = next(t for t in before["tasks"] if t["id"] == TASK_ID)
+
+    resp = client.post(
+        f"/v1/tasks/{TASK_ID}/time",
+        json={"actual_minutes": 25, "expected_version": 1},
+        headers=_headers(),
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["actual_minutes"] == 25
+
+    after = client.get("/v1/workspace", headers=_headers()).json()["data"]
+    after_task = next(t for t in after["tasks"] if t["id"] == TASK_ID)
+
+    assert after_task["actual_minutes"] == 25
+    assert after_task["remaining_minutes"] == before_task["remaining_minutes"]
+    assert after_task["status"] == before_task["status"]
+
+
+def test_task_time_other_user_404(client, db_path):
+    conn = get_connection(db_path)
+    try:
+        with conn:
+            conn.execute("INSERT INTO users (id, name) VALUES ('us_other', '别人')")
+        token = auth.create_token("us_other")
+    finally:
+        conn.close()
+
+    resp = client.post(
+        f"/v1/tasks/{TASK_ID}/time",
+        json={"actual_minutes": 10},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "TASK_NOT_FOUND"
+
+
+def test_task_time_rejects_negative(client):
+    resp = client.post(
+        f"/v1/tasks/{TASK_ID}/time",
+        json={"actual_minutes": -5},
+        headers=_headers(),
+    )
+
+    assert resp.status_code == 422
+
+
+def test_task_progress_does_not_touch_plan(client, db_path):
+    def snapshot():
+        conn = get_connection(db_path)
+        try:
+            return {
+                table: [tuple(r) for r in conn.execute(f"SELECT * FROM {table}")]
+                for table in ("plans", "plan_items")
+            }
+        finally:
+            conn.close()
+
+    before = snapshot()
+    client.post(
+        f"/v1/tasks/{TASK_ID}/progress",
+        json={"payload": {"status": "done", "remaining_minutes": 0}},
+        headers=_headers(),
+    )
+    client.post(
+        f"/v1/tasks/{TASK_ID}/time", json={"actual_minutes": 30}, headers=_headers()
+    )
+
+    assert snapshot() == before
+
+
+def test_started_block_not_touched_by_progress(client, db_path):
+    """已开始的时间块不能被进度反馈改动。"""
+    started_at = "2026-11-30T08:00:00+08:00"
+    conn = get_connection(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "UPDATE plan_items SET start_at = ?, end_at = ? WHERE id = 'pi_demo_01'",
+                (started_at, "2026-11-30T09:00:00+08:00"),
+            )
+        before = [tuple(r) for r in conn.execute("SELECT * FROM plan_items")]
+    finally:
+        conn.close()
+
+    client.post(
+        f"/v1/tasks/{TASK_ID}/progress",
+        json={"payload": {"status": "doing", "remaining_minutes": 30}},
+        headers=_headers(),
+    )
+    client.post(
+        f"/v1/tasks/{TASK_ID}/time", json={"actual_minutes": 10}, headers=_headers()
+    )
+
+    conn = get_connection(db_path)
+    try:
+        after = [tuple(r) for r in conn.execute("SELECT * FROM plan_items")]
+    finally:
+        conn.close()
+
+    assert after == before

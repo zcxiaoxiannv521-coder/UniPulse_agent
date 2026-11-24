@@ -25,6 +25,7 @@
 | 第三阶段·改期 | 改期预览 + 确认时同事务更新考试 | ✅ 完成 |
 | 第三阶段·兼容 | `/v1/*` 兼容接口（workspace/预览/确认） | ✅ 完成 |
 | 第三阶段·通知 | `POST /v1/notices` + 演示通知 | ✅ 完成 |
+| 第三阶段·进度 | 任务进度与用时记录（`task_logs`） | ✅ 完成 |
 | 第三阶段·待做 | 提醒排期、写接口（goals/classes/progress） | ⬜ 未开始 |
 | 第四阶段 | 企微接入（A）、看板（C）、联调 | ⬜ 未开始 |
 
@@ -126,7 +127,7 @@ python -m uvicorn api.app:app --reload --port 8000
 python -m pytest -q
 ```
 
-应看到 `177 passed`。
+应看到 `203 passed`。
 
 ### 5. 查看数据库
 

@@ -22,8 +22,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from api import auth
-from services import notices, preview, scheduler, workspace
+from services import notices, preview, scheduler, tasks, workspace
 from services.notices import NoticeError
+from services.tasks import TaskError
 from services.preview import PreviewError
 
 router = APIRouter(prefix="/v1", tags=["C 兼容接口"])
@@ -54,6 +55,13 @@ _STATUS_BY_CODE = {
     "NOTICE_NOT_FOUND": 404,
     "EMPTY_NOTICE": 422,
     "NOTICE_TOO_LONG": 422,
+    "TASK_NOT_FOUND": 404,
+    "TASK_ALREADY_DONE": 409,
+    "INVALID_STATUS": 422,
+    "INVALID_REMAINING": 422,
+    "INVALID_ACTUAL": 422,
+    "INVALID_FEEDBACK": 422,
+    "INVALID_ARGUMENT": 422,
 }
 
 
@@ -61,6 +69,8 @@ def _error_response(exc: Exception) -> JSONResponse:
     if isinstance(exc, PreviewError):
         return _fail(_STATUS_BY_CODE.get(exc.code, 422), exc.code, exc.message)
     if isinstance(exc, NoticeError):
+        return _fail(_STATUS_BY_CODE.get(exc.code, 422), exc.code, exc.message)
+    if isinstance(exc, TaskError):
         return _fail(_STATUS_BY_CODE.get(exc.code, 422), exc.code, exc.message)
     if isinstance(exc, scheduler.SchedulerError):
         return _fail(_STATUS_BY_CODE.get(exc.code, 422), exc.code, exc.message)
@@ -90,6 +100,27 @@ class NoticeCreateRequest(BaseModel):
     )
 
 
+class TaskProgressPayload(BaseModel):
+    status: str = Field(description="todo / doing / partial / done")
+    remaining_minutes: int = Field(description="用户报告的剩余预估（分钟）")
+    actual_minutes: int | None = Field(default=None, description="累计实际用时（分钟）")
+    feedback: str | None = Field(default=None, description="进度说明")
+
+
+class TaskProgressRequest(BaseModel):
+    """C 的 record_progress 请求体。"""
+
+    payload: TaskProgressPayload
+    expected_version: int | None = Field(default=None, description="工作台版本，仅记录")
+
+
+class TaskTimeRequest(BaseModel):
+    """C 的 record_time 请求体（累计实际用时，覆盖式上报）。"""
+
+    actual_minutes: int = Field(description="累计实际学习分钟数")
+    expected_version: int | None = Field(default=None, description="工作台版本，仅记录")
+
+
 class ConfirmRequest(BaseModel):
     confirm_code: str | None = Field(default=None, description="确认码，如 T03")
     expected_version: int | None = Field(default=None, description="正式计划版本")
@@ -116,6 +147,45 @@ def create_notice_route(
     except NoticeError as exc:
         return _error_response(exc)
     return _ok(saved)
+
+
+@router.post("/tasks/{task_id}/progress", summary="记录任务进度")
+def record_progress_route(
+    task_id: str,
+    payload: TaskProgressRequest,
+    identity: auth.Identity = Depends(auth.require_identity),
+) -> dict:
+    """用户明确报告的进度：状态 + 剩余工作量（可选累计用时与说明）。
+
+    - 只有 `status="done"` 才会把任务标记完成
+    - 已完成任务不能被静默改回未完成（409）
+    - 不修改正式计划与时间块
+    """
+    try:
+        result = tasks.record_progress(
+            identity.user_id,
+            task_id,
+            payload.payload.model_dump(exclude_none=True),
+        )
+    except TaskError as exc:
+        return _error_response(exc)
+    return _ok(result)
+
+
+@router.post("/tasks/{task_id}/time", summary="记录累计实际用时")
+def record_time_route(
+    task_id: str,
+    payload: TaskTimeRequest,
+    identity: auth.Identity = Depends(auth.require_identity),
+) -> dict:
+    """只记录累计学习时长，不改剩余工作量、不改状态、不动计划。"""
+    try:
+        result = tasks.record_time(
+            identity.user_id, task_id, payload.actual_minutes
+        )
+    except TaskError as exc:
+        return _error_response(exc)
+    return _ok(result)
 
 
 @router.post("/previews", summary="按新考试时间生成改期预览")

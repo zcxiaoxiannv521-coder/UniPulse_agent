@@ -18,7 +18,9 @@ B 新增 `/v1/*` 兼容层（`api/compat.py` + `services/workspace.py`），C �
 | `POST /v1/actions/{id}/confirm` | ✅ | `preview.confirm_preview()`（同事务更新考试+计划+提醒） |
 | `POST /v1/actions/{id}/cancel` | ✅ | `preview.cancel_preview()` |
 | `POST /v1/notices` | ✅ | `notices.save_notice()`（2026-11-21） |
-| `POST /v1/goals`、`/classes`、`/tasks/*/progress|time`、`/agent/messages` | ❌ 仍缺 | 写接口/Agent 不在首版范围 |
+| `POST /v1/tasks/{id}/progress` | ✅ | `tasks.record_progress()`（2026-11-24） |
+| `POST /v1/tasks/{id}/time` | ✅ | `tasks.record_time()`（2026-11-24） |
+| `POST /v1/goals`、`/classes`、`/agent/messages` | ❌ 仍缺 | 写接口/Agent 不在首版范围 |
 
 **仍然缺的字段（没有数据来源，按约定返回空值）：**
 

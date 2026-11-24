@@ -759,6 +759,8 @@ B 增加一层薄适配。它不重复业务逻辑：全部调用 `services/`，
 |---|---|---|
 | GET | `/v1/workspace` | 工作台数据（version/profile/goals/events/classes/tasks/study_blocks/plans/reminders/notices/pending/activity） |
 | POST | `/v1/notices` | 保存通知原文（只入库，不解析、不改考试） |
+| POST | `/v1/tasks/{task_id}/progress` | 记录明确进度（状态 + 剩余工作量） |
+| POST | `/v1/tasks/{task_id}/time` | 记录累计实际用时（不改剩余工作量） |
 | POST | `/v1/previews` | 按**新考试时间**生成改期预览 |
 | GET | `/v1/previews/{preview_id}` | 预览详情 |
 | POST | `/v1/actions/{preview_id}/confirm` | 确认并提交（同一事务更新考试、计划、提醒） |
@@ -777,6 +779,34 @@ B 增加一层薄适配。它不重复业务逻辑：全部调用 `services/`，
 - 成功返回 `{id, text, status, channel, received_at, published_at, message}`
 - `channel` 数据库没有该列，返回展示用默认值 `"未标注"`（不是伪造的真实渠道）
 - `status` 复用 `parsed` 表示"已入库"，`parse_json` 为空时对外显示"待解析"
+
+**请求体（任务进度）——与 C 的 `record_progress` 一致：**
+
+```json
+{ "payload": { "status": "doing", "remaining_minutes": 45,
+               "actual_minutes": 15, "feedback": "第三章还剩一半" },
+  "expected_version": 1 }
+```
+
+| 规则 | 说明 |
+|---|---|
+| `status` | `todo` / `doing` / `partial` / `done`；`partial` 落库为 `doing`（数据库只允许三种） |
+| `remaining_minutes` | 0—10080；未完成时必填且 > 0；`done` 时强制归零 |
+| `actual_minutes` | 可选的累计用时，只增不减 |
+| 已完成任务 | 不能改回未完成 → 409 `TASK_ALREADY_DONE` |
+| 正式计划 | **不修改**，也不触发重排 |
+
+**请求体（实际用时）——与 C 的 `record_time` 一致：**
+
+```json
+{ "actual_minutes": 30, "expected_version": 1 }
+```
+
+- `actual_minutes` 是**累计值**，内部按增量写 `task_logs`
+- 只记时间：不改状态、不改 `remaining_minutes`、不动正式计划
+- 累计值比已记录的小 → 422 `INVALID_ACTUAL`（历史不可抹掉）；相同值重复上报幂等
+
+两者成功后 `GET /v1/workspace` 的 `tasks[].actual_minutes` 立刻反映 `task_logs` 的累计值。
 
 **请求体（创建预览）：**
 
@@ -925,6 +955,7 @@ V4 硬性要求：「网页校验访问者与企微用户的绑定关系，不�
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | v0.1 | 2026-11-20 | 初稿：按 V4 第 3 节定义 A/B/C 三个角色、7 个服务函数、9 个 HTTP 接口、8 个错误码 |
+| v0.6 | 2026-11-24 | 新增 `/v1/tasks/{id}/progress`、`/v1/tasks/{id}/time`；新增 `task_logs` 表存累计用时（增量）与反馈 |
 | v0.5 | 2026-11-21 | 新增 `POST /v1/notices`；预览的 `source_notice_ids` 增加归属校验；workspace 字段按 C 的严格类型校验补齐（`channel`、`source`、`tasks.version` 等） |
 | v0.4 | 2026-11-21 | 增加 `/v1/*` 兼容接口（workspace、改期预览、确认/取消）；改期预览携带 `proposed_exam`，确认时同事务更新考试时间 |
 | v0.3 | 2026-11-21 | 预览确认落地：新增 `/previews/{id}` 读取、`/confirm`、`/cancel`；confirm 必须带 `confirm_code`（服务端强校验）；补充 404/409/422 的细分错误码 |

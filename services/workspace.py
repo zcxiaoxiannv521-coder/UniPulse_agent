@@ -236,6 +236,22 @@ def build_workspace(user_id: str, *, conn: sqlite3.Connection | None = None) -> 
             (user_id,),
         ).fetchall()
 
+        log_sum_rows = db.execute(
+            """
+            SELECT task_id, COALESCE(SUM(minutes), 0) AS total
+            FROM task_logs WHERE user_id = ? GROUP BY task_id
+            """,
+            (user_id,),
+        ).fetchall()
+        feedback_rows = db.execute(
+            """
+            SELECT task_id, feedback FROM task_logs
+            WHERE user_id = ? AND feedback IS NOT NULL AND feedback <> ''
+            ORDER BY created_at DESC, id DESC
+            """,
+            (user_id,),
+        ).fetchall()
+
         notice_rows = db.execute(
             """
             SELECT * FROM notifications WHERE user_id = ?
@@ -297,13 +313,14 @@ def build_workspace(user_id: str, *, conn: sqlite3.Connection | None = None) -> 
             }
         )
 
+    actual_by_task = {row["task_id"]: int(row["total"] or 0) for row in log_sum_rows}
+    feedback_by_task: dict[str, str] = {}
+    for row in feedback_rows:
+        feedback_by_task.setdefault(row["task_id"], row["feedback"])
+
     tasks = []
     for task in task_rows:
-        estimated = task["estimated_minutes"]
         remaining = task["remaining_minutes"]
-        actual = 0
-        if isinstance(estimated, int) and isinstance(remaining, int):
-            actual = max(0, estimated - remaining)
         tasks.append(
             {
                 "id": task["id"],
@@ -313,8 +330,9 @@ def build_workspace(user_id: str, *, conn: sqlite3.Connection | None = None) -> 
                 "status": task["status"],
                 # tasks 表没有 version 列；C 的客户端要求 int，这里用 1 占位
                 "version": 1,
-                "actual_minutes": actual,  # 由「预计 - 剩余」推导
-                "feedback": task["detail"] or "",
+                # 实际用时来自 task_logs（SUM），不再是"预计-剩余"的推导
+                "actual_minutes": actual_by_task.get(task["id"], 0),
+                "feedback": feedback_by_task.get(task["id"], ""),
                 "required": not bool(task["is_optional"]),
                 "included": True,          # 没有"移出范围"的字段
             }
