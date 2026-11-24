@@ -17,14 +17,16 @@ B 新增 `/v1/*` 兼容层（`api/compat.py` + `services/workspace.py`），C �
 | `GET /v1/previews/{id}` | ✅ | `preview.get_preview()` |
 | `POST /v1/actions/{id}/confirm` | ✅ | `preview.confirm_preview()`（同事务更新考试+计划+提醒） |
 | `POST /v1/actions/{id}/cancel` | ✅ | `preview.cancel_preview()` |
-| `POST /v1/goals`、`/classes`、`/tasks/*`、`/notices`、`/agent/messages` | ❌ 仍缺 | 写接口/Agent 不在首版范围 |
+| `POST /v1/notices` | ✅ | `notices.save_notice()`（2026-11-21） |
+| `POST /v1/goals`、`/classes`、`/tasks/*/progress|time`、`/agent/messages` | ❌ 仍缺 | 写接口/Agent 不在首版范围 |
 
 **仍然缺的字段（没有数据来源，按约定返回空值）：**
 
 | C 字段 | 现状 |
 |---|---|
 | `goals.scope` / `goals.availability` | 表里没有，返回 `""` |
-| `tasks.version` | 表里没有，返回 `null` |
+| `notices[].channel` | 表里没有，返回展示默认值 `"未标注"` |
+| `tasks.version` | 表里没有，返回占位 `1`（C 的客户端要求 int） |
 | `tasks.included` | 恒为 `true`（无"移出范围"字段） |
 | `tasks.actual_minutes` | 由「预计 - 剩余」推导 |
 | `plans.event_version` | 用考试当前 version 代替 |

@@ -34,7 +34,7 @@ from datetime import datetime, timedelta
 from typing import Iterator
 
 from database.connection import get_connection
-from services import clock
+from services import clock, notices
 from services import scheduler
 
 ENV_PREVIEW_TTL = "UNIPULSE_PREVIEW_TTL_MINUTES"
@@ -587,6 +587,10 @@ def create_exam_change_preview(
             raise scheduler.SchedulerError(
                 "EXAM_NOT_FOUND", f"用户 {user_id!r} 名下没有考试 {exam_id!r}"
             )
+
+        if notice_id:
+            # 引用的通知必须属于当前用户，防止拿别人的通知 ID 造预览
+            notices.assert_notices_owned(user_id, [notice_id], conn=db)
 
         current_start = _exam_start_of(exam)
         if current_start is not None and proposed_start == current_start:

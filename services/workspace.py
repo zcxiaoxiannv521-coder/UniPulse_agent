@@ -27,6 +27,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from services import clock
+from services.notices import CHANNEL_UNKNOWN, render_notice
 from services.queries import (
     _combine,
     _connection,
@@ -142,16 +143,15 @@ def to_client_preview(detail: dict) -> dict:
     preserved = list(dict.fromkeys(preserved))
 
     status = detail.get("status")
-    return {
+    preview = {
         "id": detail.get("preview_id"),
         "confirm_code": detail.get("confirm_code"),
         "kind": "exam_change",
         "event_id": exam.get("id") or proposed.get("exam_id"),
         "expected_version": detail.get("base_version"),
         "event_version": proposed.get("exam_version"),
-        "old": old_start,
-        "new": new_start,
-        "remind_at": None,
+        "old": old_start or "",
+        "new": new_start or "",
         "status": "applied" if status == "confirmed" else status,
         "expires_at": detail.get("expires_at"),
         "source_notice_ids": (
@@ -161,6 +161,9 @@ def to_client_preview(detail: dict) -> dict:
         "preserved": preserved,
         "capacity": capacity_of(detail),
     }
+    # 提醒排期还没做：没有真实 remind_at 时就不输出这个键，
+    # 避免 C 的客户端把它当成日期去解析。
+    return preview
 
 
 def _row_to_detail(row: sqlite3.Row) -> dict:
@@ -235,9 +238,8 @@ def build_workspace(user_id: str, *, conn: sqlite3.Connection | None = None) -> 
 
         notice_rows = db.execute(
             """
-            SELECT id, raw_text, status, received_at, published_at
-            FROM notifications WHERE user_id = ?
-            ORDER BY received_at DESC LIMIT 20
+            SELECT * FROM notifications WHERE user_id = ?
+            ORDER BY received_at DESC LIMIT 50
             """,
             (user_id,),
         ).fetchall()
@@ -272,9 +274,10 @@ def build_workspace(user_id: str, *, conn: sqlite3.Connection | None = None) -> 
             "id": exam["id"],
             "title": exam["name"],
             "start_at": start_at.isoformat() if start_at else None,
-            "location": exam["location"],
+            "location": exam["location"] or "",
             "version": int(exam["version"]),
-            "source": None,
+            # 数据库没有 source 列；C 要求 str，给空串而不是 null
+            "source": "",
             "source_notice_id": exam["source_notice_id"],
         }
         events.append(event)
@@ -290,7 +293,7 @@ def build_workspace(user_id: str, *, conn: sqlite3.Connection | None = None) -> 
                 "course": session["course_name"],
                 "start_at": start_at.isoformat() if start_at else None,
                 "end_at": end_at.isoformat() if end_at else None,
-                "location": session["location"],
+                "location": session["location"] or "",
             }
         )
 
@@ -304,11 +307,12 @@ def build_workspace(user_id: str, *, conn: sqlite3.Connection | None = None) -> 
         tasks.append(
             {
                 "id": task["id"],
-                "goal_id": task["goal_id"],
+                "goal_id": task["goal_id"] or "",
                 "title": task["title"],
                 "remaining_minutes": remaining or 0,
                 "status": task["status"],
-                "version": None,          # tasks 表没有 version 列
+                # tasks 表没有 version 列；C 的客户端要求 int，这里用 1 占位
+                "version": 1,
                 "actual_minutes": actual,  # 由「预计 - 剩余」推导
                 "feedback": task["detail"] or "",
                 "required": not bool(task["is_optional"]),
@@ -357,30 +361,20 @@ def build_workspace(user_id: str, *, conn: sqlite3.Connection | None = None) -> 
                 "version": int(plan["version"]),
                 "status": plan["status"],
                 # 计划跟着考试版本失效：用考试当前 version 代替
-                "event_version": exam["version"] if exam else None,
+                "event_version": exam["version"] if exam else 0,
                 "source_notice_ids": [],
                 "summary": plan["note"] or "",
             }
         )
 
-    notices = [
-        {
-            "id": row["id"],
-            "text": row["raw_text"],
-            "status": NOTICE_STATUS_LABELS.get(row["status"], row["status"]),
-            "channel": None,
-            "received_at": _normalize_time(row["received_at"]),
-            "published_at": _normalize_time(row["published_at"]),
-        }
-        for row in notice_rows
-    ]
+    notices = [render_notice(row) for row in notice_rows]
 
     reminders = []
     for row in reminder_rows:
         reminders.append(
             {
                 "id": row["id"],
-                "event_id": None,   # 没有直接字段，反查见模块说明
+                "event_id": "",     # 没有直接字段；C 要求 str，用空串
                 "at": _normalize_time(row["remind_at"]),
                 "status": row["status"],
             }

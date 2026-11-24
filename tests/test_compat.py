@@ -130,7 +130,7 @@ def test_create_preview_via_compat(client):
             "event_id": seed_module.EXAM_ID,
             "new_start": "2026-12-02T14:00:00+08:00",
             "expected_version": 1,
-            "source_notice_ids": ["nt_demo"],
+            "source_notice_ids": [seed_module.NOTICE_ID],
         },
         headers=_headers(),
     )
@@ -300,3 +300,190 @@ def test_error_envelope_shape(client):
     body = resp.json()
     assert body["ok"] is False
     assert set(body["error"]) >= {"code", "message"}
+
+
+# ---------------------------------------------------------------- 通知保存接口
+def test_save_notice_via_compat(client):
+    resp = client.post(
+        "/v1/notices",
+        json={"text": "教务通知：考试调整至 12 月 2 日", "expected_version": 1},
+        headers=_headers(),
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    data = body["data"]
+    assert data["id"].startswith("nt_")
+    assert data["text"] == "教务通知：考试调整至 12 月 2 日"
+    assert data["channel"]
+    assert data["message"]
+
+
+def test_saved_notice_appears_in_workspace(client):
+    created = client.post(
+        "/v1/notices",
+        json={"text": "这条通知应该出现在 workspace 里"},
+        headers=_headers(),
+    ).json()["data"]
+
+    data = client.get("/v1/workspace", headers=_headers()).json()["data"]
+    ids = [notice["id"] for notice in data["notices"]]
+
+    assert created["id"] in ids
+    notice = next(n for n in data["notices"] if n["id"] == created["id"])
+    assert notice["text"] == "这条通知应该出现在 workspace 里"
+    assert notice["channel"]  # 不能是 None
+
+
+def test_empty_notice_422(client):
+    resp = client.post("/v1/notices", json={"text": "   "}, headers=_headers())
+
+    assert resp.status_code == 422
+    assert resp.json()["ok"] is False
+    assert resp.json()["error"]["code"] == "EMPTY_NOTICE"
+
+
+def test_too_long_notice_422(client):
+    resp = client.post(
+        "/v1/notices", json={"text": "通" * 20001}, headers=_headers()
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "NOTICE_TOO_LONG"
+
+
+def test_notice_requires_auth(client):
+    resp = client.post("/v1/notices", json={"text": "无 token"})
+
+    assert resp.status_code == 401
+
+
+def test_body_user_id_cannot_spoof_identity(client, db_path):
+    """请求体里塞 user_id 不会改变身份归属。"""
+    resp = client.post(
+        "/v1/notices",
+        json={"text": "伪造身份测试", "user_id": "us_other"},
+        headers=_headers(),
+    )
+
+    assert resp.status_code == 200
+    notice_id = resp.json()["data"]["id"]
+
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute(
+            "SELECT user_id FROM notifications WHERE id = ?", (notice_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row["user_id"] == seed_module.DEMO_USER_ID
+
+
+def test_other_user_cannot_see_notice(client, db_path):
+    client.post(
+        "/v1/notices", json={"text": "A 的私密通知"}, headers=_headers()
+    )
+
+    conn = get_connection(db_path)
+    try:
+        with conn:
+            conn.execute("INSERT INTO users (id, name) VALUES ('us_other', '别人')")
+        token = auth.create_token("us_other")
+    finally:
+        conn.close()
+
+    data = client.get(
+        "/v1/workspace", headers={"Authorization": f"Bearer {token}"}
+    ).json()["data"]
+
+    assert all("A 的私密通知" != n["text"] for n in data["notices"])
+
+
+def test_preview_cannot_reference_other_users_notice(client, db_path):
+    other = client.post(
+        "/v1/notices",
+        json={"text": "B 用户的通知"},
+        headers=_headers(),
+    ).json()["data"]
+
+    conn = get_connection(db_path)
+    try:
+        with conn:
+            conn.execute("INSERT INTO users (id, name) VALUES ('us_b', '乙')")
+        token = auth.create_token("us_b")
+    finally:
+        conn.close()
+
+    resp = client.post(
+        "/v1/previews",
+        json={
+            "event_id": seed_module.EXAM_ID,
+            "new_start": "2026-12-02T14:00:00+08:00",
+            "source_notice_ids": [other["id"]],
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    # 乙既没有这场考试，也没有这条通知；先被通知归属检查拦下
+    assert resp.status_code in (403, 404)
+    assert resp.json()["ok"] is False
+
+
+def test_workspace_types_match_client_schema(client):
+    """按 C 的 ApiClient.snapshot 校验规则逐项检查类型。"""
+    data = client.get("/v1/workspace", headers=_headers()).json()["data"]
+
+    schema = {
+        "goals": {"id": str, "title": str, "event_id": str, "scope": str,
+                  "daily_max_minutes": int, "availability": str,
+                  "status": str, "version": int},
+        "events": {"id": str, "title": str, "start_at": str, "location": str,
+                   "source": str, "version": int},
+        "plans": {"id": str, "goal_id": str, "version": int, "status": str,
+                  "event_version": int, "source_notice_ids": list, "summary": str},
+        "classes": {"id": str, "course": str, "start_at": str, "end_at": str,
+                    "location": str},
+        "tasks": {"id": str, "goal_id": str, "title": str,
+                  "remaining_minutes": int, "actual_minutes": int,
+                  "status": str, "version": int},
+        "study_blocks": {"id": str, "task_id": str, "plan_id": str,
+                         "plan_version": int, "start_at": str, "end_at": str,
+                         "status": str},
+        "reminders": {"id": str, "event_id": str, "at": str, "status": str},
+        "notices": {"id": str, "text": str, "status": str, "channel": str,
+                    "received_at": str},
+        "pending": {"id": str, "kind": str, "expected_version": int,
+                    "status": str, "expires_at": str, "source_notice_ids": list,
+                    "changes": list, "preserved": list},
+        "activity": {"at": str, "name": str, "detail": str},
+    }
+
+    for table, fields in schema.items():
+        for row in data[table]:
+            for key, kind in fields.items():
+                assert type(row.get(key)) is kind, f"{table}.{key}={row.get(key)!r}"
+
+    notice_ids = {n["id"] for n in data["notices"]}
+    for item in data["plans"] + data["pending"]:
+        for notice_id in item["source_notice_ids"]:
+            assert notice_id in notice_ids
+
+
+def test_notice_save_does_not_change_exam_or_plan(client, db_path):
+    def snapshot():
+        conn = get_connection(db_path)
+        try:
+            return {
+                table: [tuple(r) for r in conn.execute(f"SELECT * FROM {table}")]
+                for table in ("exams", "plans", "plan_items")
+            }
+        finally:
+            conn.close()
+
+    before = snapshot()
+    client.post("/v1/notices", json={"text": "不会改考试"}, headers=_headers())
+    after = snapshot()
+
+    assert before == after

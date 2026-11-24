@@ -22,7 +22,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from api import auth
-from services import preview, scheduler, workspace
+from services import notices, preview, scheduler, workspace
+from services.notices import NoticeError
 from services.preview import PreviewError
 
 router = APIRouter(prefix="/v1", tags=["C 兼容接口"])
@@ -50,11 +51,16 @@ _STATUS_BY_CODE = {
     "PREVIEW_NOT_PENDING": 409,
     "EXAM_TIME_UNCHANGED": 409,
     "EXAM_IN_PAST": 409,
+    "NOTICE_NOT_FOUND": 404,
+    "EMPTY_NOTICE": 422,
+    "NOTICE_TOO_LONG": 422,
 }
 
 
 def _error_response(exc: Exception) -> JSONResponse:
     if isinstance(exc, PreviewError):
+        return _fail(_STATUS_BY_CODE.get(exc.code, 422), exc.code, exc.message)
+    if isinstance(exc, NoticeError):
         return _fail(_STATUS_BY_CODE.get(exc.code, 422), exc.code, exc.message)
     if isinstance(exc, scheduler.SchedulerError):
         return _fail(_STATUS_BY_CODE.get(exc.code, 422), exc.code, exc.message)
@@ -74,6 +80,16 @@ class PreviewCreateRequest(BaseModel):
     )
 
 
+class NoticeCreateRequest(BaseModel):
+    """C 的 `save_notice(text, expected_version)` 请求体。"""
+
+    text: str = Field(description="通知原文（1—20000 字）")
+    expected_version: int | None = Field(
+        default=None,
+        description="调用方看到的工作台版本；通知是追加写入，这里只记录不校验",
+    )
+
+
 class ConfirmRequest(BaseModel):
     confirm_code: str | None = Field(default=None, description="确认码，如 T03")
     expected_version: int | None = Field(default=None, description="正式计划版本")
@@ -85,6 +101,23 @@ def get_workspace(identity: auth.Identity = Depends(auth.require_identity)) -> d
     return _ok(workspace.build_workspace(identity.user_id))
 
 
+@router.post("/notices", summary="保存通知原文")
+def create_notice_route(
+    payload: NoticeCreateRequest,
+    identity: auth.Identity = Depends(auth.require_identity),
+) -> dict:
+    """保存一条通知原文（只入库，不解析、不改考试、不生成预览）。
+
+    成功返回 `{id, text, status, channel, received_at, published_at, message}`，
+    之后 `GET /v1/workspace` 的 `notices` 里就能看到它。
+    """
+    try:
+        saved = notices.save_notice(identity.user_id, payload.text)
+    except NoticeError as exc:
+        return _error_response(exc)
+    return _ok(saved)
+
+
 @router.post("/previews", summary="按新考试时间生成改期预览")
 def create_preview_route(
     payload: PreviewCreateRequest,
@@ -92,6 +125,8 @@ def create_preview_route(
 ) -> dict:
     """验证考试归属，按拟议的新时间算排程，生成待确认预览（不改正式数据）。"""
     try:
+        if payload.source_notice_ids:
+            notices.assert_notices_owned(identity.user_id, payload.source_notice_ids)
         detail = preview.create_exam_change_preview(
             identity.user_id,
             payload.event_id,
@@ -99,7 +134,7 @@ def create_preview_route(
             expected_version=payload.expected_version,
             notice_id=payload.source_notice_ids[0] if payload.source_notice_ids else None,
         )
-    except (PreviewError, scheduler.SchedulerError) as exc:
+    except (PreviewError, NoticeError, scheduler.SchedulerError) as exc:
         return _error_response(exc)
     return _ok(workspace.to_client_preview(detail))
 

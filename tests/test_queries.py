@@ -93,7 +93,8 @@ def test_demo_user_dashboard(conn):
     # 演示任务没有截止时间，所以最近截止为空（不是编造一个）
     assert board["next_deadline"] is None
     assert board["pending_changes"] == []
-    assert board["notices"] == []
+    assert len(board["notices"]) == 1
+    assert "调整至" in board["notices"][0]["summary"]
 
     # 时间块分别落在三天里
     by_date = {day["date"]: day["items"] for day in board["days"]}

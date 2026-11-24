@@ -758,12 +758,25 @@ B 增加一层薄适配。它不重复业务逻辑：全部调用 `services/`，
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/v1/workspace` | 工作台数据（version/profile/goals/events/classes/tasks/study_blocks/plans/reminders/notices/pending/activity） |
+| POST | `/v1/notices` | 保存通知原文（只入库，不解析、不改考试） |
 | POST | `/v1/previews` | 按**新考试时间**生成改期预览 |
 | GET | `/v1/previews/{preview_id}` | 预览详情 |
 | POST | `/v1/actions/{preview_id}/confirm` | 确认并提交（同一事务更新考试、计划、提醒） |
 | POST | `/v1/actions/{preview_id}/cancel` | 取消草稿 |
 
 **语义映射：** C 的 `event` = B 的 `exam`（一场考试事件）；C 的 `action` = B 的 `preview`（同一张 `previews` 表）。
+
+**请求体（保存通知）：**
+
+```json
+{ "text": "教务通知：……", "expected_version": 1 }
+```
+
+- `text` 必填，去首尾空白后 1—20000 字；为空返回 422 `EMPTY_NOTICE`，超长返回 422 `NOTICE_TOO_LONG`
+- `expected_version` 只做记录：通知是追加写入，不参与计划版本冲突判断
+- 成功返回 `{id, text, status, channel, received_at, published_at, message}`
+- `channel` 数据库没有该列，返回展示用默认值 `"未标注"`（不是伪造的真实渠道）
+- `status` 复用 `parsed` 表示"已入库"，`parse_json` 为空时对外显示"待解析"
 
 **请求体（创建预览）：**
 
@@ -912,6 +925,7 @@ V4 硬性要求：「网页校验访问者与企微用户的绑定关系，不�
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | v0.1 | 2026-11-20 | 初稿：按 V4 第 3 节定义 A/B/C 三个角色、7 个服务函数、9 个 HTTP 接口、8 个错误码 |
+| v0.5 | 2026-11-21 | 新增 `POST /v1/notices`；预览的 `source_notice_ids` 增加归属校验；workspace 字段按 C 的严格类型校验补齐（`channel`、`source`、`tasks.version` 等） |
 | v0.4 | 2026-11-21 | 增加 `/v1/*` 兼容接口（workspace、改期预览、确认/取消）；改期预览携带 `proposed_exam`，确认时同事务更新考试时间 |
 | v0.3 | 2026-11-21 | 预览确认落地：新增 `/previews/{id}` 读取、`/confirm`、`/cancel`；confirm 必须带 `confirm_code`（服务端强校验）；补充 404/409/422 的细分错误码 |
 | v0.2 | 2026-11-20 | 只读查询落地：`get_context` 增加 `time_mode` / `plan` / `plan_items`；`Dashboard` 增加 `today` / `time_mode` / `days[].weekday` / `items[].location` / `items[].ref_id` / `next_class.session_id`；所有时间字段统一为带时区 ISO；`missing.reason` 补全枚举 |

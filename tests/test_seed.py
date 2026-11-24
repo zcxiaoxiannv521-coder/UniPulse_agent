@@ -103,8 +103,11 @@ def test_seed_does_not_write_future_change(conn):
     ).fetchone()
     assert exam["exam_date"] == "2026-12-04"
 
+    # 有一条"收到的原文"通知，但它不代表考试已改期
     notices = conn.execute("SELECT COUNT(*) AS n FROM notifications").fetchone()
-    assert notices["n"] == 0
+    assert notices["n"] == 1
+    previews = conn.execute("SELECT COUNT(*) AS n FROM previews").fetchone()
+    assert previews["n"] == 0
 
 
 def test_seed_does_not_overwrite_user_changes(conn):
@@ -157,3 +160,47 @@ def test_reset_rebuilds_demo_data(conn):
         "SELECT exam_date FROM exams WHERE id = ?", (seed_module.EXAM_ID,)
     ).fetchone()
     assert exam["exam_date"] == "2026-12-04"
+
+
+def test_seed_inserts_demo_notice(conn):
+    """演示库里应有一条"收到的原文"通知。"""
+    seed_module.seed(conn)
+
+    row = conn.execute(
+        "SELECT * FROM notifications WHERE id = ?", (seed_module.NOTICE_ID,)
+    ).fetchone()
+
+    assert row is not None
+    assert row["user_id"] == seed_module.DEMO_USER_ID
+    assert row["raw_text"] == seed_module.NOTICE_TEXT
+    assert "2026年12月2日14:00" in row["raw_text"]
+    # 原文只是数据，不代表考试已经改期
+    exam = conn.execute(
+        "SELECT exam_date FROM exams WHERE id = ?", (seed_module.EXAM_ID,)
+    ).fetchone()
+    assert exam["exam_date"] == "2026-12-04"
+
+
+def test_seed_does_not_duplicate_notice(conn):
+    seed_module.seed(conn)
+    count = conn.execute(
+        "SELECT COUNT(*) AS n FROM notifications WHERE user_id = ?",
+        (seed_module.DEMO_USER_ID,),
+    ).fetchone()["n"]
+    assert count == 1
+
+
+def test_seed_does_not_overwrite_notice(conn):
+    seed_module.seed(conn)
+    with conn:
+        conn.execute(
+            "UPDATE notifications SET raw_text = '用户自己改过的原文' WHERE id = ?",
+            (seed_module.NOTICE_ID,),
+        )
+
+    seed_module.seed(conn)
+
+    row = conn.execute(
+        "SELECT raw_text FROM notifications WHERE id = ?", (seed_module.NOTICE_ID,)
+    ).fetchone()
+    assert row["raw_text"] == "用户自己改过的原文"

@@ -52,6 +52,14 @@ PLAN_ITEM_IDS = ("pi_demo_01", "pi_demo_02", "pi_demo_03")
 
 PREF_ID = "up_demo_daily_limit"
 
+# 演示通知：只是"学生收到的原文"，不代表考试已经改期
+NOTICE_ID = "nt_demo_exam_change"
+NOTICE_TEXT = (
+    "教务通知：原定于2026年12月4日14:00举行的机器学习期末考试调整至"
+    "2026年12月2日14:00，请同学及时调整复习安排。"
+)
+NOTICE_RECEIVED_AT = "2026-11-30T08:55:00+08:00"
+
 
 # ---------- 插入工具 ----------
 def _insert_rows(
@@ -115,6 +123,26 @@ def _insert_courses(conn: sqlite3.Connection) -> None:
                 "name": COURSE_NAME,
                 "teacher": "王老师",
                 "location": "教三 302",
+            }
+        ],
+    )
+
+
+def _insert_notifications(conn: sqlite3.Connection) -> None:
+    """一条脱敏通知，仅作为"收到的原文"，不改变考试时间。"""
+    _insert_rows(
+        conn,
+        "notifications",
+        [
+            {
+                "id": NOTICE_ID,
+                "user_id": DEMO_USER_ID,
+                "wecom_msg_id": None,
+                "raw_text": NOTICE_TEXT,
+                "received_at": NOTICE_RECEIVED_AT,
+                "published_at": None,
+                "parse_json": None,
+                "status": "parsed",
             }
         ],
     )
@@ -290,6 +318,7 @@ def _delete_demo(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM exams WHERE id = ?", (EXAM_ID,))
     placeholders = ", ".join("?" for _ in SESSION_IDS)
     conn.execute(f"DELETE FROM class_sessions WHERE id IN ({placeholders})", SESSION_IDS)
+    conn.execute("DELETE FROM notifications WHERE id = ?", (NOTICE_ID,))
     conn.execute("DELETE FROM courses WHERE id = ?", (COURSE_ID,))
     conn.execute("DELETE FROM user_preferences WHERE id = ?", (PREF_ID,))
     conn.execute("DELETE FROM users WHERE id = ?", (DEMO_USER_ID,))
@@ -336,6 +365,7 @@ def seed(conn: sqlite3.Connection, reset: bool = False) -> dict[str, int]:
         _insert_users(conn)
         _insert_preferences(conn)
         _insert_courses(conn)
+        _insert_notifications(conn)
         _insert_class_sessions(conn)
         _insert_exams(conn)
         _insert_goals(conn)
