@@ -236,6 +236,14 @@ def build_workspace(user_id: str, *, conn: sqlite3.Connection | None = None) -> 
             (user_id,),
         ).fetchall()
 
+        goal_pref_rows = db.execute(
+            """
+            SELECT scope, key, value_json FROM user_preferences
+            WHERE user_id = ? AND key IN ('goal_scope', 'goal_availability')
+            """,
+            (user_id,),
+        ).fetchall()
+
         log_sum_rows = db.execute(
             """
             SELECT task_id, COALESCE(SUM(minutes), 0) AS total
@@ -353,6 +361,16 @@ def build_workspace(user_id: str, *, conn: sqlite3.Connection | None = None) -> 
         if item.get("task_id")
     ]
 
+    goal_texts: dict[str, dict[str, str]] = {}
+    for row in goal_pref_rows:
+        try:
+            value = json.loads(row["value_json"])
+        except (TypeError, ValueError):
+            value = row["value_json"]
+        goal_texts.setdefault(row["scope"], {})[row["key"]] = (
+            value if isinstance(value, str) else str(value)
+        )
+
     goals = []
     for goal in goal_rows:
         goals.append(
@@ -361,8 +379,13 @@ def build_workspace(user_id: str, *, conn: sqlite3.Connection | None = None) -> 
                 "title": goal["title"],
                 "event_id": goal["exam_id"],
                 "daily_max_minutes": int(goal["daily_limit_minutes"]),
-                "scope": "",          # 没有字段
-                "availability": "",    # 没有字段（T11）
+                # 这两项存在 user_preferences（scope=goal:<id>），不是 goals 的列
+                "scope": goal_texts.get(f"goal:{goal['id']}", {}).get(
+                    "goal_scope", ""
+                ),
+                "availability": goal_texts.get(f"goal:{goal['id']}", {}).get(
+                    "goal_availability", ""
+                ),
                 "status": goal["status"],
                 "version": int(goal["version"]),
             }

@@ -20,7 +20,9 @@ B 新增 `/v1/*` 兼容层（`api/compat.py` + `services/workspace.py`），C �
 | `POST /v1/notices` | ✅ | `notices.save_notice()`（2026-11-21） |
 | `POST /v1/tasks/{id}/progress` | ✅ | `tasks.record_progress()`（2026-11-24） |
 | `POST /v1/tasks/{id}/time` | ✅ | `tasks.record_time()`（2026-11-24） |
-| `POST /v1/goals`、`/classes`、`/agent/messages` | ❌ 仍缺 | 写接口/Agent 不在首版范围 |
+| `POST /v1/goals` | ✅ | `goals.save_goal()`（2026-11-25） |
+| `POST /v1/classes` | ✅ | `classes.add_class()`（2026-11-25） |
+| `POST /v1/agent/messages` | ❌ 仍缺 | 属 A 的工作 |
 
 **仍然缺的字段（没有数据来源，按约定返回空值）：**
 

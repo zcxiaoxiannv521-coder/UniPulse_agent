@@ -718,3 +718,173 @@ def test_started_block_not_touched_by_progress(client, db_path):
         conn.close()
 
     assert after == before
+
+
+# ---------------------------------------------------------------- 目标与课表
+def test_save_goal_via_compat(client):
+    resp = client.post(
+        "/v1/goals",
+        json={
+            "payload": {
+                "title": "准备机器学习期末考试",
+                "scope": "第三章、第四章",
+                "event_id": seed_module.EXAM_ID,
+                "daily_max_minutes": 120,
+                "availability": "每天 19:00 后",
+            },
+            "expected_version": 1,
+        },
+        headers=_headers(),
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["data"]["goal"]["daily_max_minutes"] == 120
+    assert body["data"]["goal"]["scope"] == "第三章、第四章"
+
+    data = client.get("/v1/workspace", headers=_headers()).json()["data"]
+    goal = data["goals"][0]
+    assert goal["daily_max_minutes"] == 120
+    assert goal["scope"] == "第三章、第四章"
+    assert goal["availability"] == "每天 19:00 后"
+
+
+def test_save_goal_requires_auth(client):
+    resp = client.post("/v1/goals", json={"payload": {}})
+    assert resp.status_code == 401
+
+
+def test_save_goal_other_users_exam(client, db_path):
+    conn = get_connection(db_path)
+    try:
+        with conn:
+            conn.execute("INSERT INTO users (id, name) VALUES ('us_other', '别人')")
+            conn.execute(
+                "INSERT INTO exams (id, user_id, name, exam_date) "
+                "VALUES ('ex_other', 'us_other', '别人的考试', '2026-12-10')"
+            )
+    finally:
+        conn.close()
+
+    resp = client.post(
+        "/v1/goals",
+        json={
+            "payload": {
+                "title": "偷别人的考试",
+                "event_id": "ex_other",
+                "daily_max_minutes": 90,
+            }
+        },
+        headers=_headers(),
+    )
+
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "EXAM_NOT_FOUND"
+
+
+def test_save_goal_invalid_daily_limit(client):
+    resp = client.post(
+        "/v1/goals",
+        json={
+            "payload": {
+                "title": "非法上限",
+                "event_id": seed_module.EXAM_ID,
+                "daily_max_minutes": 999,
+            }
+        },
+        headers=_headers(),
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "INVALID_DAILY_LIMIT"
+
+
+def test_save_goal_body_user_id_ignored(client, db_path):
+    client.post(
+        "/v1/goals",
+        json={
+            "payload": {
+                "title": "伪造身份的目标",
+                "event_id": seed_module.EXAM_ID,
+                "daily_max_minutes": 60,
+            },
+            "user_id": "us_other",
+        },
+        headers=_headers(),
+    )
+
+    conn = get_connection(db_path)
+    try:
+        goal = conn.execute(
+            "SELECT user_id FROM goals WHERE id = ?", (seed_module.GOAL_ID,)
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert goal["user_id"] == seed_module.DEMO_USER_ID
+
+
+def test_add_class_via_compat(client):
+    resp = client.post(
+        "/v1/classes",
+        json={
+            "payload": {
+                "course": "数据结构",
+                "location": "B205",
+                "start_at": "2026-12-01T08:00:00+08:00",
+                "end_at": "2026-12-01T09:35:00+08:00",
+            },
+            "expected_version": 1,
+        },
+        headers=_headers(),
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["data"]["class"]["course"] == "数据结构"
+
+    data = client.get("/v1/workspace", headers=_headers()).json()["data"]
+    assert any(c["course"] == "数据结构" for c in data["classes"])
+
+
+def test_add_class_requires_auth(client):
+    resp = client.post("/v1/classes", json={"payload": {}})
+    assert resp.status_code == 401
+
+
+def test_add_class_time_conflict(client):
+    resp = client.post(
+        "/v1/classes",
+        json={
+            "payload": {
+                "course": "冲突课程",
+                "location": "",
+                "start_at": "2026-11-30T10:30:00+08:00",
+                "end_at": "2026-11-30T11:00:00+08:00",
+            }
+        },
+        headers=_headers(),
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "CLASS_TIME_CONFLICT"
+
+
+def test_add_class_invalid_time(client):
+    resp = client.post(
+        "/v1/classes",
+        json={
+            "payload": {
+                "course": "时间反了",
+                "location": "",
+                "start_at": "2026-12-01T10:00:00+08:00",
+                "end_at": "2026-12-01T09:00:00+08:00",
+            }
+        },
+        headers=_headers(),
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "INVALID_TIME"

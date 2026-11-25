@@ -759,6 +759,8 @@ B 增加一层薄适配。它不重复业务逻辑：全部调用 `services/`，
 |---|---|---|
 | GET | `/v1/workspace` | 工作台数据（version/profile/goals/events/classes/tasks/study_blocks/plans/reminders/notices/pending/activity） |
 | POST | `/v1/notices` | 保存通知原文（只入库，不解析、不改考试） |
+| POST | `/v1/goals` | 保存/更新学习目标（含复习范围与允许时段） |
+| POST | `/v1/classes` | 录入一节具体日期课程 |
 | POST | `/v1/tasks/{task_id}/progress` | 记录明确进度（状态 + 剩余工作量） |
 | POST | `/v1/tasks/{task_id}/time` | 记录累计实际用时（不改剩余工作量） |
 | POST | `/v1/previews` | 按**新考试时间**生成改期预览 |
@@ -779,6 +781,42 @@ B 增加一层薄适配。它不重复业务逻辑：全部调用 `services/`，
 - 成功返回 `{id, text, status, channel, received_at, published_at, message}`
 - `channel` 数据库没有该列，返回展示用默认值 `"未标注"`（不是伪造的真实渠道）
 - `status` 复用 `parsed` 表示"已入库"，`parse_json` 为空时对外显示"待解析"
+
+**请求体（保存目标）——与 C 的 `save_goal` 一致：**
+
+```json
+{ "payload": { "title": "准备机器学习期末考试", "scope": "第三章、第四章",
+               "event_id": "ex_demo_ml_final", "daily_max_minutes": 120,
+               "availability": "每天 19:00 后" },
+  "expected_version": 1 }
+```
+
+| 规则 | 说明 |
+|---|---|
+| `title` | 必填，1—60 字 |
+| `event_id` | 必填，必须是当前用户名下的考试，否则 404 `EXAM_NOT_FOUND` |
+| `daily_max_minutes` | 整数，15—480 |
+| `scope` / `availability` | 可选，各 ≤1000 字；存 `user_preferences`（`scope='goal:<id>'`） |
+| 更新策略 | 同一考试已有 active 目标 → 更新并 `version+1`；否则新建 |
+| 计划 | **不改**：保存目标不会生成或修改学习计划 |
+
+**请求体（录入课程）——与 C 的 `add_class` 一致：**
+
+```json
+{ "payload": { "course": "数据结构", "location": "B205",
+               "start_at": "2026-12-01T08:00:00+08:00",
+               "end_at": "2026-12-01T09:35:00+08:00" },
+  "expected_version": 1 }
+```
+
+| 规则 | 说明 |
+|---|---|
+| `course` | 必填，1—60 字；同名课程复用 `courses` 记录 |
+| `location` | 可选，≤120 字 |
+| `start_at` / `end_at` | ISO 8601，**必须带时区**；结束必须晚于开始；必须同一天；单次 ≤12 小时 |
+| 冲突 | 与已有课次时间重叠 → 409 `CLASS_TIME_CONFLICT` |
+| 存储 | `courses`（档案）+ `class_sessions`（本次具体日期课次），同一事务 |
+| 周期 | 不做每周重复，符合 V4「具体日期课表」 |
 
 **请求体（任务进度）——与 C 的 `record_progress` 一致：**
 
@@ -955,6 +993,7 @@ V4 硬性要求：「网页校验访问者与企微用户的绑定关系，不�
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | v0.1 | 2026-11-20 | 初稿：按 V4 第 3 节定义 A/B/C 三个角色、7 个服务函数、9 个 HTTP 接口、8 个错误码 |
+| v0.7 | 2026-11-25 | 新增 `/v1/goals`、`/v1/classes`；目标的 scope/availability 存入 `user_preferences`（scope=goal:<id>） |
 | v0.6 | 2026-11-24 | 新增 `/v1/tasks/{id}/progress`、`/v1/tasks/{id}/time`；新增 `task_logs` 表存累计用时（增量）与反馈 |
 | v0.5 | 2026-11-21 | 新增 `POST /v1/notices`；预览的 `source_notice_ids` 增加归属校验；workspace 字段按 C 的严格类型校验补齐（`channel`、`source`、`tasks.version` 等） |
 | v0.4 | 2026-11-21 | 增加 `/v1/*` 兼容接口（workspace、改期预览、确认/取消）；改期预览携带 `proposed_exam`，确认时同事务更新考试时间 |

@@ -22,8 +22,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from api import auth
-from services import notices, preview, scheduler, tasks, workspace
+from services import classes, goals, notices, preview, scheduler, tasks, workspace
 from services.notices import NoticeError
+from services.classes import ClassError
+from services.goals import GoalError
 from services.tasks import TaskError
 from services.preview import PreviewError
 
@@ -62,6 +64,15 @@ _STATUS_BY_CODE = {
     "INVALID_ACTUAL": 422,
     "INVALID_FEEDBACK": 422,
     "INVALID_ARGUMENT": 422,
+    "INVALID_TITLE": 422,
+    "INVALID_TEXT": 422,
+    "INVALID_EVENT": 422,
+    "INVALID_DAILY_LIMIT": 422,
+    "INVALID_COURSE": 422,
+    "INVALID_LOCATION": 422,
+    "INVALID_TIME": 422,
+    "CROSS_DAY_NOT_SUPPORTED": 422,
+    "CLASS_TIME_CONFLICT": 409,
 }
 
 
@@ -71,6 +82,10 @@ def _error_response(exc: Exception) -> JSONResponse:
     if isinstance(exc, NoticeError):
         return _fail(_STATUS_BY_CODE.get(exc.code, 422), exc.code, exc.message)
     if isinstance(exc, TaskError):
+        return _fail(_STATUS_BY_CODE.get(exc.code, 422), exc.code, exc.message)
+    if isinstance(exc, GoalError):
+        return _fail(_STATUS_BY_CODE.get(exc.code, 422), exc.code, exc.message)
+    if isinstance(exc, ClassError):
         return _fail(_STATUS_BY_CODE.get(exc.code, 422), exc.code, exc.message)
     if isinstance(exc, scheduler.SchedulerError):
         return _fail(_STATUS_BY_CODE.get(exc.code, 422), exc.code, exc.message)
@@ -98,6 +113,20 @@ class NoticeCreateRequest(BaseModel):
         default=None,
         description="调用方看到的工作台版本；通知是追加写入，这里只记录不校验",
     )
+
+
+class GoalSaveRequest(BaseModel):
+    """C 的 save_goal 请求体。"""
+
+    payload: dict = Field(description="title / event_id / daily_max_minutes / scope / availability")
+    expected_version: int | None = Field(default=None, description="工作台版本，仅记录")
+
+
+class ClassAddRequest(BaseModel):
+    """C 的 add_class 请求体。"""
+
+    payload: dict = Field(description="course / location / start_at / end_at")
+    expected_version: int | None = Field(default=None, description="工作台版本，仅记录")
 
 
 class TaskProgressPayload(BaseModel):
@@ -147,6 +176,35 @@ def create_notice_route(
     except NoticeError as exc:
         return _error_response(exc)
     return _ok(saved)
+
+
+@router.post("/goals", summary="保存学习目标")
+def save_goal_route(
+    payload: GoalSaveRequest,
+    identity: auth.Identity = Depends(auth.require_identity),
+) -> dict:
+    """保存/更新当前用户的学习目标（同一考试已存在则更新并 version+1）。
+
+    只保存目标与约束，不生成或修改学习计划。
+    """
+    try:
+        result = goals.save_goal(identity.user_id, payload.payload)
+    except GoalError as exc:
+        return _error_response(exc)
+    return _ok(result)
+
+
+@router.post("/classes", summary="录入一节具体日期课程")
+def add_class_route(
+    payload: ClassAddRequest,
+    identity: auth.Identity = Depends(auth.require_identity),
+) -> dict:
+    """录入一次具体日期的上课记录（课程档案按名称复用）。"""
+    try:
+        result = classes.add_class(identity.user_id, payload.payload)
+    except ClassError as exc:
+        return _error_response(exc)
+    return _ok(result)
 
 
 @router.post("/tasks/{task_id}/progress", summary="记录任务进度")
