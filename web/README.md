@@ -53,7 +53,7 @@ web/
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate           # Windows: .venv\Scripts\activate
-python -m pip install -r web/requirements.txt
+python -m pip install -r web/requirements.txt   # 等价于根目录的 requirements-web.txt
 cd web
 python -m streamlit run app.py
 ```
@@ -87,9 +87,20 @@ python -m unittest discover -s web/tests -v
 
 统一契约参考 [`../docs/API_CONTRACT.md`](../docs/API_CONTRACT.md)，不能用 C 的旧草案替换 B 的文档。
 
-当前后端只有 `/health` 和 `/`；**没有实现看板/预览/确认接口**。C 的旧 ApiClient 使用 `/v1/workspace`，与 B 约定的 `/api/v1/dashboard`、响应字段及 token 方式不一致，因此这次提交只保证演示模式可运行。
+B 已实现 `/v1/*` 兼容接口（`GET /v1/workspace`、通知、预览、确认、取消、任务进度/用时、目标与课表录入），
+C 的 `ApiClient` 已与这些接口对齐；`api/compat.py` 负责把 `/v1` 的 `{ok:true,data}` 信封映射到 B 的服务层。
 
-逐项差异见 [`docs/INTEGRATION_NOTES.md`](docs/INTEGRATION_NOTES.md)。后续先与 A/B 确认再实现适配；本次不改 `api/`、`database/`、`services/` 或中央接口文档，不擅自决定身份方案。
+联调模式：
+
+```bash
+export UNIPULSE_API_BASE=http://127.0.0.1:8000
+export UNIPULSE_LOCAL_TEST=1
+export UNIPULSE_API_TOKEN=<B 签发的测试 Token>
+```
+
+不设 `UNIPULSE_API_BASE` 时仍是本地演示模式（`fixtures/workspace.json`）。
+两条链路共用同一份页面代码，页面顶部会明确标注当前是"演示数据"还是"共享后端模式"。
+接口契约见 [`../docs/API_CONTRACT.md`](../docs/API_CONTRACT.md)（第 5.12 节为 `/v1` 兼容层）。
 
 ---
 

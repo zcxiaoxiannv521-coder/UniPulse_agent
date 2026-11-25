@@ -139,6 +139,8 @@ B **不主动推送**企微消息，也**不生成**面向用户的自然语言�
 
 `status`：`normal` 正常 / `moved` 已调课 / `cancelled` 已停课。
 
+> `course_name` 是后端从 `courses` 表联查带出的**显示字段**，`class_sessions` 表本身不存它（见 `DATA_SCHEMA.md` 3.4 节）。下面的 `Exam` 同理。
+
 > 调课**只改这一条** `class_sessions`，不动每周课表。这是 V4 的硬要求。
 
 ### 3.3 `Exam`
@@ -297,20 +299,29 @@ B **不主动推送**企微消息，也**不生成**面向用户的自然语言�
 {
   "user": { "id": "us_9f2c1a7b3d4e", "name": "小吴" },
   "generated_at": "2026-11-30T09:00:00+08:00",
-  "plan": { "id": "pl_2f3a4b5c6d7e", "version": 4, "status": "confirmed", "note": null },
-  "next_class": { "title": "机器学习", "start_at": "2026-11-30T10:00:00+08:00", "location": "教三 302" },
-  "next_deadline": { "title": "提交实验报告", "due_at": "2026-12-01T23:59:00+08:00", "remaining_minutes": 60 },
+  "today": "2026-11-30",
+  "time_mode": "demo",
+  "plan": { "id": "pl_2f3a4b5c6d7e", "goal_id": "gl_...", "version": 4,
+            "status": "confirmed", "note": null,
+            "updated_at": "2026-11-30T09:00:00+08:00" },
+  "next_class": { "title": "机器学习", "start_at": "2026-11-30T10:00:00+08:00",
+                  "end_at": "2026-11-30T11:30:00+08:00", "location": "教三 302",
+                  "session_id": "cs_..." },
+  "next_deadline": { "task_id": "tk_...", "title": "提交实验报告",
+                     "due_at": "2026-12-01T23:59:00+08:00", "remaining_minutes": 60 },
   "pending_changes": [
-    { "preview_id": "pv_4b5c6d7e8f9a", "confirm_code": "T03",
+    { "preview_id": "pv_4b5c6d7e8f9a", "confirm_code": "T03", "kind": "reschedule",
       "summary": "考试提前到 12-02，缺口 80 分钟待选择",
       "expires_at": "2026-11-30T10:42:00+08:00" }
   ],
   "days": [
     {
       "date": "2026-11-30",
+      "weekday": "周一",
       "items": [
         { "start_at": "2026-11-30T19:00:00+08:00", "end_at": "2026-11-30T20:00:00+08:00",
-          "title": "复习第三章", "item_type": "task", "status": "planned", "source": "plan" }
+          "title": "复习第三章", "item_type": "task", "status": "planned",
+          "source": "plan", "location": null, "ref_id": "pi_..." }
       ]
     }
   ],
@@ -322,6 +333,13 @@ B **不主动推送**企微消息，也**不生成**面向用户的自然语言�
   ]
 }
 ```
+
+`days[].items[].source`：`plan` 来自计划 / `course` 来自课表 / `exam` 来自考试。
+`days[].items[].status`：`planned` 待做 / `done` 已完成 / `locked` 锁定。
+`ref_id` 指向来源记录的 ID，C 需要展开详情时用它调对应接口。
+
+> **实现状态（2026-11-20）：** `services/queries.py` 的 `get_dashboard()` 已实现；
+> HTTP 接口 `/api/v1/dashboard` 尚未实现。
 
 `days[].items[].source`：`plan` 来自计划 / `course` 来自课表 / `exam` 来自考试。
 
@@ -389,17 +407,29 @@ get_context(user_id: str, date_from: str | None = None, date_to: str | None = No
   "user": { "id": "us_...", "name": "小吴", "timezone": "Asia/Shanghai" },
   "range": { "from": "2026-11-30", "to": "2026-12-06" },
   "as_of": "2026-11-30T09:00:00+08:00",
+  "time_mode": "demo",
   "data_version": { "plan_id": "pl_2f3a4b5c6d7e", "plan_version": 3 },
   "goals": [ /* Goal */ ],
   "exams": [ /* Exam */ ],
   "sessions": [ /* ClassSession */ ],
   "tasks": [ /* Task */ ],
-  "preferences": [ { "key": "daily_limit_minutes", "value": 90, "scope": "goal:gl_5e6f7a8b9c0d" } ],
+  "preferences": [ { "key": "daily_limit_minutes", "value": 90,
+                     "scope": "goal:gl_5e6f7a8b9c0d",
+                     "confirmed_at": "2026-11-20T20:50:44+08:00" } ],
+  "plan": { "id": "pl_...", "goal_id": "gl_...", "status": "confirmed",
+            "version": 3, "note": null, "updated_at": "2026-11-30T09:00:00+08:00" },
+  "plan_items": [ /* PlanItem */ ],
   "missing": [ { "field": "courses", "reason": "NO_COURSE_DATA" } ]
 }
 ```
 
-`missing` 是「数据不全」的唯一表达方式。例如用户还没录课表，`sessions` 为空且 `missing` 含 `NO_COURSE_DATA`，A 应提示补全，而不是当成「今天没课」。
+`time_mode`：当前是 `real` 还是 `demo`，方便 A 在演示时确认时间基准。
+
+`missing` 是「数据不全」的唯一表达方式。例如用户还没录课表，`sessions` 为空且 `missing` 含 `NO_CLASS_DATA_IN_RANGE`，A 应提示补全，而不是当成「今天没课」。
+
+`missing[].reason` 目前有：`NO_CLASS_DATA_IN_RANGE`、`NO_UPCOMING_EXAM`、`NO_OPEN_TASK`、`NO_CONFIRMED_PLAN`、`EMPTY_PLAN`、`NO_ACTIVE_GOAL`。
+
+> **实现状态（2026-11-20）：** `services/queries.py` 中已实现，可直接调用。
 
 ### 4.4 `record_notice`
 
@@ -612,9 +642,15 @@ V4 明确要求「不能凭链接里的用户编号读取数据」。所以：
 | GET | `/api/v1/plans/current` | 当前正式计划 | token |
 | GET | `/api/v1/previews/{preview_id}` | 某个草稿的前后差异 | token |
 | POST | `/api/v1/previews/{preview_id}/confirm` | 网页备用确认入口 | token |
+| POST | `/api/v1/previews/{preview_id}/cancel` | 取消草稿 | token |
 | GET | `/api/v1/notifications/{notification_id}` | 通知原文与来源 | token |
 
 所有 token 接口都有 `?token=...`，且**只返回 token 所属用户的数据**。
+
+> **实现状态（2026-11-21）：** `/health`、`/dashboard`、`/courses`、`/exams`、`/tasks`、
+> `/plans/current`、`/previews/{id}`、`/previews/{id}/confirm`、`/previews/{id}/cancel` 已实现；
+> `/notifications/{id}` 待通知模块完成后实现。
+> Token 由 `api/auth.py` 签发：`python -m api.auth --user us_demo_a`。
 
 ### 5.4 `GET /api/v1/dashboard`
 
@@ -663,13 +699,28 @@ GET /api/v1/courses?token=...&date_from=2026-11-30&date_to=2026-12-06
 ### 5.10 `POST /api/v1/previews/{preview_id}/confirm`
 
 ```json
-{ "token": "eyJ...", "expected_version": 3 }
+{ "confirm_code": "T03", "expected_version": 3 }
 ```
 
-- 成功：返回与 `confirm_preview` 相同结构
-- 版本不符：409 `VERSION_CONFLICT`
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `confirm_code` | **是** | 预览里显示的确认码；必须与预览一致，防止只凭 ID 跳过确认 |
+| `expected_version` | 否 | 调用方看到的正式计划版本；与预览的 `base_version` 不符时拒绝 |
+
+- 成功：返回与 `confirm_preview` 相同结构（`ok` / `applied` / `reminders`）
+- 确认码不对：422 `CONFIRM_CODE_MISMATCH`；没给：422 `MISSING_CONFIRM_CODE`
+- 过期 / 已取消：409 `PREVIEW_EXPIRED` / `PREVIEW_NOT_PENDING`
+- 版本变化：409 `VERSION_CONFLICT`
+- 重复确认：返回 200，`duplicate: true`，不会重复建计划
 
 这是**备用入口**（V4：企微不可用时网页保留简版确认）。主路径永远是企微私聊。
+
+### 5.10.1 `POST /api/v1/previews/{preview_id}/cancel`
+
+无请求体。只把预览置为 `cancelled`，不影响正式计划。
+
+- 成功：200，返回预览详情（`status: "cancelled"`）
+- 已确认/已过期：409 `PREVIEW_NOT_PENDING`
 
 ### 5.11 统一错误响应
 
@@ -684,7 +735,139 @@ GET /api/v1/courses?token=...&date_from=2026-11-30&date_to=2026-12-06
 }
 ```
 
+`UNAUTHORIZED` 会在 `details.reason` 里说明具体原因，C 可以据此决定提示文案：
+
+| reason | 含义 |
+|---|---|
+| `MISSING_TOKEN` | 没带 Token |
+| `MALFORMED_TOKEN` | Token 格式不对（或 Authorization 头不是 `Bearer xxx`） |
+| `BAD_SIGNATURE` | 签名不匹配（伪造或密钥变了） |
+| `TOKEN_EXPIRED` | 已过期 |
+| `NOT_YET_VALID` | 签发时间在未来（时钟不一致） |
+| `WRONG_MODE` | 演示 Token 用在正式模式，或反之 |
+
 HTTP 状态码与 `code` 对应关系见第 6 节。
+
+---
+
+### 5.12 `/v1/*` 兼容接口（给成员 C 的网页）
+
+C 的页面按 `GET /v1/workspace` + `{ok:true,data}` 信封实现，为了让**已有页面不改**就能连真实后端，
+B 增加一层薄适配。它不重复业务逻辑：全部调用 `services/`，并且与 `/api/v1/*` 共用同一套 Token 与用户隔离。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/v1/workspace` | 工作台数据（version/profile/goals/events/classes/tasks/study_blocks/plans/reminders/notices/pending/activity） |
+| POST | `/v1/notices` | 保存通知原文（只入库，不解析、不改考试） |
+| POST | `/v1/goals` | 保存/更新学习目标（含复习范围与允许时段） |
+| POST | `/v1/classes` | 录入一节具体日期课程 |
+| POST | `/v1/tasks/{task_id}/progress` | 记录明确进度（状态 + 剩余工作量） |
+| POST | `/v1/tasks/{task_id}/time` | 记录累计实际用时（不改剩余工作量） |
+| POST | `/v1/previews` | 按**新考试时间**生成改期预览 |
+| GET | `/v1/previews/{preview_id}` | 预览详情 |
+| POST | `/v1/actions/{preview_id}/confirm` | 确认并提交（同一事务更新考试、计划、提醒） |
+| POST | `/v1/actions/{preview_id}/cancel` | 取消草稿 |
+
+**语义映射：** C 的 `event` = B 的 `exam`（一场考试事件）；C 的 `action` = B 的 `preview`（同一张 `previews` 表）。
+
+**请求体（保存通知）：**
+
+```json
+{ "text": "教务通知：……", "expected_version": 1 }
+```
+
+- `text` 必填，去首尾空白后 1—20000 字；为空返回 422 `EMPTY_NOTICE`，超长返回 422 `NOTICE_TOO_LONG`
+- `expected_version` 只做记录：通知是追加写入，不参与计划版本冲突判断
+- 成功返回 `{id, text, status, channel, received_at, published_at, message}`
+- `channel` 数据库没有该列，返回展示用默认值 `"未标注"`（不是伪造的真实渠道）
+- `status` 复用 `parsed` 表示"已入库"，`parse_json` 为空时对外显示"待解析"
+
+**请求体（保存目标）——与 C 的 `save_goal` 一致：**
+
+```json
+{ "payload": { "title": "准备机器学习期末考试", "scope": "第三章、第四章",
+               "event_id": "ex_demo_ml_final", "daily_max_minutes": 120,
+               "availability": "每天 19:00 后" },
+  "expected_version": 1 }
+```
+
+| 规则 | 说明 |
+|---|---|
+| `title` | 必填，1—60 字 |
+| `event_id` | 必填，必须是当前用户名下的考试，否则 404 `EXAM_NOT_FOUND` |
+| `daily_max_minutes` | 整数，15—480 |
+| `scope` / `availability` | 可选，各 ≤1000 字；存 `user_preferences`（`scope='goal:<id>'`） |
+| 更新策略 | 同一考试已有 active 目标 → 更新并 `version+1`；否则新建 |
+| 计划 | **不改**：保存目标不会生成或修改学习计划 |
+
+**请求体（录入课程）——与 C 的 `add_class` 一致：**
+
+```json
+{ "payload": { "course": "数据结构", "location": "B205",
+               "start_at": "2026-12-01T08:00:00+08:00",
+               "end_at": "2026-12-01T09:35:00+08:00" },
+  "expected_version": 1 }
+```
+
+| 规则 | 说明 |
+|---|---|
+| `course` | 必填，1—60 字；同名课程复用 `courses` 记录 |
+| `location` | 可选，≤120 字 |
+| `start_at` / `end_at` | ISO 8601，**必须带时区**；结束必须晚于开始；必须同一天；单次 ≤12 小时 |
+| 冲突 | 与已有课次时间重叠 → 409 `CLASS_TIME_CONFLICT` |
+| 存储 | `courses`（档案）+ `class_sessions`（本次具体日期课次），同一事务 |
+| 周期 | 不做每周重复，符合 V4「具体日期课表」 |
+
+**请求体（任务进度）——与 C 的 `record_progress` 一致：**
+
+```json
+{ "payload": { "status": "doing", "remaining_minutes": 45,
+               "actual_minutes": 15, "feedback": "第三章还剩一半" },
+  "expected_version": 1 }
+```
+
+| 规则 | 说明 |
+|---|---|
+| `status` | `todo` / `doing` / `partial` / `done`；`partial` 落库为 `doing`（数据库只允许三种） |
+| `remaining_minutes` | 0—10080；未完成时必填且 > 0；`done` 时强制归零 |
+| `actual_minutes` | 可选的累计用时，只增不减 |
+| 已完成任务 | 不能改回未完成 → 409 `TASK_ALREADY_DONE` |
+| 正式计划 | **不修改**，也不触发重排 |
+
+**请求体（实际用时）——与 C 的 `record_time` 一致：**
+
+```json
+{ "actual_minutes": 30, "expected_version": 1 }
+```
+
+- `actual_minutes` 是**累计值**，内部按增量写 `task_logs`
+- 只记时间：不改状态、不改 `remaining_minutes`、不动正式计划
+- 累计值比已记录的小 → 422 `INVALID_ACTUAL`（历史不可抹掉）；相同值重复上报幂等
+
+两者成功后 `GET /v1/workspace` 的 `tasks[].actual_minutes` 立刻反映 `task_logs` 的累计值。
+
+**请求体（创建预览）：**
+
+```json
+{
+  "event_id": "ex_demo_ml_final",
+  "new_start": "2026-12-02T14:00:00+08:00",
+  "expected_version": 1,
+  "source_notice_ids": ["nt_demo"]
+}
+```
+
+**响应信封：**
+
+```json
+{ "ok": true, "data": { ... } }
+{ "ok": false, "error": { "code": "VERSION_CONFLICT", "message": "..." } }
+```
+
+**确认接口的差异（需要注意）：**
+
+- `/v1/actions/{id}/confirm` 允许**不传** `confirm_code`：C 当前只发 `{}`，兼容层会读取预览自带的确认码。
+- `/api/v1/previews/{id}/confirm` 仍然**强制要求** `confirm_code`，两套入口的安全等级不同，这是为兼容 C 现状的临时取舍，待 C 改成带上确认码后可统一。
 
 ---
 
@@ -810,3 +993,9 @@ V4 硬性要求：「网页校验访问者与企微用户的绑定关系，不�
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | v0.1 | 2026-11-20 | 初稿：按 V4 第 3 节定义 A/B/C 三个角色、7 个服务函数、9 个 HTTP 接口、8 个错误码 |
+| v0.7 | 2026-11-25 | 新增 `/v1/goals`、`/v1/classes`；目标的 scope/availability 存入 `user_preferences`（scope=goal:<id>） |
+| v0.6 | 2026-11-24 | 新增 `/v1/tasks/{id}/progress`、`/v1/tasks/{id}/time`；新增 `task_logs` 表存累计用时（增量）与反馈 |
+| v0.5 | 2026-11-21 | 新增 `POST /v1/notices`；预览的 `source_notice_ids` 增加归属校验；workspace 字段按 C 的严格类型校验补齐（`channel`、`source`、`tasks.version` 等） |
+| v0.4 | 2026-11-21 | 增加 `/v1/*` 兼容接口（workspace、改期预览、确认/取消）；改期预览携带 `proposed_exam`，确认时同事务更新考试时间 |
+| v0.3 | 2026-11-21 | 预览确认落地：新增 `/previews/{id}` 读取、`/confirm`、`/cancel`；confirm 必须带 `confirm_code`（服务端强校验）；补充 404/409/422 的细分错误码 |
+| v0.2 | 2026-11-20 | 只读查询落地：`get_context` 增加 `time_mode` / `plan` / `plan_items`；`Dashboard` 增加 `today` / `time_mode` / `days[].weekday` / `items[].location` / `items[].ref_id` / `next_class.session_id`；所有时间字段统一为带时区 ISO；`missing.reason` 补全枚举 |

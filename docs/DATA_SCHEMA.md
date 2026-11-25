@@ -79,6 +79,16 @@ users ─┬─ user_preferences
 
 `scope` 是 V4「偏好及作用范围」的直接实现：同一个用户，对某一场考试可以设「每天 90 分钟」，对另一场设「每天 60 分钟」。
 
+**当前用到的 key（2026-11-25）：**
+
+| key | scope | 含义 |
+|---|---|---|
+| `daily_limit_minutes` | `goal:<id>` | 每日学习上限（演示数据用） |
+| `goal_scope` | `goal:<id>` | 用户在网页填写的「复习范围」 |
+| `goal_availability` | `goal:<id>` | 用户填写的「允许时段与约束」 |
+
+`goals` 表没有这两列，所以放在偏好表里，避免为两个文本字段改表。
+
 ### 3.3 `courses` 课程档案
 
 | 字段 | 类型 | 说明 |
@@ -159,6 +169,28 @@ V4 说「初始目标、调整草稿和当前正式计划分开」：目标本�
 | `source` | TEXT | `manual` / `wecom` |
 
 **`estimated_minutes` 与 `remaining_minutes` 分开的理由：** V4 明确「学 30 分钟」不等于「完成了 30 分钟工作量」。只报时长时只记时间，不改剩余工作量；只有学生说「做了 8/20 题」这类明确进度，才扣减 `remaining_minutes`。
+
+### 3.7.1 `task_logs` 任务日志（2026-11-24 新增）
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | TEXT | 主键，`tl_` 前缀 |
+| `user_id` | TEXT | 外键 → `users.id`，用于隔离 |
+| `task_id` | TEXT | 外键 → `tasks.id` |
+| `kind` | TEXT | `time` 只记用时 / `progress` 进度反馈 |
+| `minutes` | INTEGER | **本次增量**（不是累计值），累计用时 = `SUM(minutes)` |
+| `feedback` | TEXT | 进度说明，仅 `progress` 使用 |
+| `created_at` | TEXT | 写入时间 |
+
+**为什么新增这张表：** `tasks` 只有 `estimated_minutes` / `remaining_minutes`，
+没有"实际用时"和"反馈"字段。把学习时长写进 `remaining_minutes` 会把"投入时间"
+误当成"完成进度"；改 `estimated_minutes` 又会破坏原计划。
+
+**迁移影响：** 只做 `CREATE TABLE IF NOT EXISTS` + 索引，老库启动时由 `init_db()`
+自动补齐，**不需要数据迁移**，也不改动任何既有列。
+
+**幂等策略：** 客户端上报的是"累计值"，服务端用「新累计 − 已有 SUM」得到增量：
+增量为 0 不写新行；为负则拒绝（历史记录不可抹掉）。
 
 ### 3.8 `plans` 计划
 

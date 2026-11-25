@@ -123,6 +123,21 @@ CREATE TABLE IF NOT EXISTS tasks (
     FOREIGN KEY (course_id) REFERENCES courses(id)
 );
 
+-- 任务日志：实际用时（增量）与进度反馈备注
+-- 设计原因：tasks 表没有"实际用时/反馈"字段，而"学习时长"不能塞进 remaining_minutes。
+-- 累计用时 = SUM(minutes)；每条记录只存本次增量，避免覆盖历史。
+CREATE TABLE IF NOT EXISTS task_logs (
+    id         TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL,
+    task_id    TEXT NOT NULL,
+    kind       TEXT NOT NULL CHECK (kind IN ('time', 'progress')),
+    minutes    INTEGER NOT NULL DEFAULT 0,     -- 本次新增的累计用时（增量，可为 0）
+    feedback   TEXT,                           -- 进度反馈备注（仅 kind='progress'）
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);
+
 -- ---------- 计划与时间块 ----------
 -- 计划：同一目标同一时间只有一条 confirmed（正式），其余为 superseded
 CREATE TABLE IF NOT EXISTS plans (
@@ -221,6 +236,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user    ON class_sessions(user_id, sessi
 CREATE INDEX IF NOT EXISTS idx_exams_user       ON exams(user_id, exam_date);
 CREATE INDEX IF NOT EXISTS idx_goals_user       ON goals(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_user       ON tasks(user_id, due_at);
+CREATE INDEX IF NOT EXISTS idx_task_logs_task   ON task_logs(user_id, task_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_plans_user       ON plans(user_id, goal_id, status);
 CREATE INDEX IF NOT EXISTS idx_plan_items_plan  ON plan_items(plan_id);
 CREATE INDEX IF NOT EXISTS idx_plan_items_task  ON plan_items(task_id);
