@@ -91,13 +91,20 @@ today, version = now.astimezone(TZ).date(), workspace["version"]
 events = {e["id"]: e for e in workspace["events"]}
 notices = {n["id"]: n for n in workspace["notices"]}
 tasks, plans = workspace["tasks"], workspace["plans"]
-goal = workspace["goals"][0] if workspace["goals"] else None
+goals_by_id = {g["id"]: g for g in workspace["goals"]}
+goal = next(iter(goals_by_id.values())) if goals_by_id else None
 pending = [a for a in workspace["pending"] if a["status"] == "pending"]
 active_tasks = [t for t in tasks if t["status"] != "done" and t.get("included", True)]
 with st.sidebar:
     st.title("UniPulse")
     st.caption("中大校园 · 智能相伴")
     page = st.radio("工作台导航", ["首页", "课表", "计划", "任务"], key="page")
+    if len(goals_by_id) > 1:
+        chosen = st.selectbox(
+            "当前目标", list(goals_by_id),
+            format_func=lambda key: goals_by_id[key]["title"], key="goal_select",
+        )
+        goal = goals_by_id[chosen]
     st.divider()
     st.write(workspace["profile"]["display_name"])
     st.caption("演示模式 · Agent 未连接" if client.is_demo else "共享后端模式")
@@ -152,9 +159,10 @@ def plan_result(compact=False):
             st.write(f"**正式计划 v{p['version']} · 已确认**")
         else:
             st.warning(f"计划待调整 · 上次确认版本 v{p['version']}，尚无有效新版。")
-        if goal:
-            st.write(goal["title"])
-            st.caption(f"每天最多 {goal['daily_max_minutes']} 分钟 · 目标版本 {goal['version']}")
+        plan_goal = goals_by_id.get(p.get("goal_id")) or goal
+        if plan_goal:
+            st.write(plan_goal["title"])
+            st.caption(f"每天最多 {plan_goal['daily_max_minutes']} 分钟 · 目标版本 {plan_goal['version']}")
         capacity_card(p.get("capacity"))
         if not compact:
             blocks = [b for b in workspace["study_blocks"] if b["plan_id"] == p["id"]]
@@ -216,7 +224,7 @@ def preview_card(action):
         if stale or expired:
             st.warning("此预览已过时或过期，请重新生成。")
         if st.button("确认本次调整", key="apply_"+action["id"], disabled=stale or expired, type="primary"):
-            run_action(client.confirm_action, action["id"])
+            run_action(client.confirm_action, action["id"], action.get("confirm_code"))
         if st.button("取消草稿", key="cancel_"+action["id"]):
             run_action(client.cancel_action, action["id"])
         st.caption("当前演示仅确认考试事实及提醒队列变化，不代表 Agent 已生成新计划或消息已送达。" if client.is_demo else "仅提交本次预览。执行结果以刷新后的后端数据为准。")

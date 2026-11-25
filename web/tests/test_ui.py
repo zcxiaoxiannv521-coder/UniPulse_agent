@@ -6,6 +6,8 @@ from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
 
+from web.client import initial_workspace
+
 APP = Path(__file__).resolve().parents[1] / 'app.py'
 
 
@@ -35,6 +37,25 @@ class PageTests(unittest.TestCase):
         records = next(e for e in self.app.expander if e.label=='通知证据与处理记录')
         self.assertFalse(records.proto.expanded)
         self.assertTrue(any('尚未连接真实 Agent' in c.value for c in self.app.caption))
+
+    def test_multiple_goals_render_and_selectable(self):
+        """多目标时侧栏出现目标选择器，页面不应崩溃。"""
+        state = initial_workspace()
+        state["goals"].append({
+            "id": "goal_second", "title": "准备大学英语四级",
+            "event_id": "exam_ml", "daily_max_minutes": 60,
+            "scope": "单词与听力", "availability": "每天 21:00 后",
+            "status": "active", "version": 1,
+        })
+        with patch("web.client.initial_workspace", return_value=state):
+            app = AppTest.from_file(str(APP), default_timeout=45).run()
+
+        self.assertFalse(app.exception)
+        selector = app.sidebar.selectbox(key="goal_select")
+        self.assertEqual(selector.value, "goal_ml")
+
+        app.sidebar.radio(key="page").set_value("计划").run()
+        self.assertFalse(app.exception)
 
     def test_all_four_pages_render(self):
         for label in ['首页','课表','计划','任务']:

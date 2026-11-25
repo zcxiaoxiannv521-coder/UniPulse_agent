@@ -16,6 +16,10 @@ TZ = timezone(timedelta(hours=8))
 class ClientError(Exception):
     """可以向用户展示的失败，不将失败返回成成功。"""
 
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = code
+
 
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -172,7 +176,7 @@ class DemoClient:
             action["status"] = "cancelled"
         return {"ok": True, "message": "已取消；考试、任务和提醒没有修改。"}
 
-    def confirm_action(self, action_id):
+    def confirm_action(self, action_id, confirm_code=None):
         action = self._one("pending", action_id)
         if action["status"] == "applied":
             return {"ok": True, "message": "此操作已应用，没有重复修改。"}
@@ -241,8 +245,35 @@ class ApiClient:
             with self.opener.open(request, timeout=20) as response:
                 body = json.load(response)
         except HTTPError as exc:
-            messages = {401: "登录或测试凭据已失效。", 403: "没有权限访问这项数据。", 409: "数据已变化，请刷新后重新预览。", 422: "后端拒绝了输入，请检查表单。"}
-            raise ClientError(messages.get(exc.code, "后端暂时无法完成请求，请稍后重试。")) from exc
+            # 后端错误体是 {"ok": false, "error": {"code", "message"}}，
+            # 409 既可能是版本冲突，也可能是课表时间冲突，必须按 code 区分。
+            body = {}
+            try:
+                raw = exc.read()
+                if raw:
+                    body = json.loads(raw.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError, OSError):
+                body = {}
+            error = body.get("error") if isinstance(body, dict) else None
+            code = error.get("code") if isinstance(error, dict) else None
+            server_message = error.get("message") if isinstance(error, dict) else None
+
+            if code in {"VERSION_CONFLICT", "EXAM_VERSION_CONFLICT"}:
+                message = "数据已变化，请刷新后重新预览。"
+            elif code == "PREVIEW_EXPIRED":
+                message = "预览已过期，请重新生成。"
+            elif code == "PREVIEW_NOT_PENDING":
+                message = "此预览已处理过，不能重复确认。"
+            elif code in {"CLASS_TIME_CONFLICT", "TASK_ALREADY_DONE"} and server_message:
+                message = server_message      # 用后端的具体说明（哪门课、什么状态）
+            elif server_message:
+                message = server_message
+            else:
+                messages = {401: "登录或测试凭据已失效。", 403: "没有权限访问这项数据。",
+                            404: "没有找到这条记录。", 409: "数据已变化，请刷新后重新预览。",
+                            422: "后端拒绝了输入，请检查表单。"}
+                message = messages.get(exc.code, "后端暂时无法完成请求，请稍后重试。")
+            raise ClientError(message, code=code) from exc
         except (URLError, TimeoutError, OSError) as exc:
             raise ClientError("无法连接后端。请确认地址和服务状态；页面未切换为模拟成功。") from exc
         except (ValueError, TypeError) as exc:
@@ -337,8 +368,9 @@ class ApiClient:
     def cancel_action(self, action_id):
         return self._request("POST", "/actions/" + quote(action_id, safe="") + "/cancel", {})
 
-    def confirm_action(self, action_id):
-        return self._request("POST", "/actions/" + quote(action_id, safe="") + "/confirm", {})
+    def confirm_action(self, action_id, confirm_code=None):
+        body = {"confirm_code": confirm_code} if confirm_code else {}
+        return self._request("POST", "/actions/" + quote(action_id, safe="") + "/confirm", body)
 
     def chat(self, message):
         return self._request("POST", "/agent/messages", {"message": message})

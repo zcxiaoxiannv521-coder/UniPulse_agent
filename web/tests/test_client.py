@@ -4,7 +4,7 @@ import io
 import json
 import unittest
 from unittest.mock import Mock, patch
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
 from web.client import ApiClient, ClientError, DemoClient, TZ, initial_workspace
 
@@ -94,7 +94,51 @@ class DemoTests(unittest.TestCase):
         self.assertEqual(self.state["version"], 2)
 
 
+def _http_error(code, payload):
+    return HTTPError("http://127.0.0.1:8000/v1/x", code, "err", {},
+                     io.BytesIO(json.dumps(payload).encode()))
+
+
 class ApiTests(unittest.TestCase):
+    def test_conflict_codes_are_distinguished(self):
+        """409 不能一律提示"数据已变化"：课表冲突要用后端的具体说明。"""
+        client = ApiClient("http://127.0.0.1:8000")
+        client.opener = Mock()
+        client.opener.open.side_effect = _http_error(409, {
+            "ok": False,
+            "error": {"code": "CLASS_TIME_CONFLICT",
+                      "message": "与已有课程「数据结构」（08:00–09:35）时间冲突"},
+        })
+
+        with self.assertRaises(ClientError) as ctx:
+            client.add_class({}, 1)
+
+        self.assertEqual(ctx.exception.code, "CLASS_TIME_CONFLICT")
+        self.assertIn("已有课程", str(ctx.exception))
+
+    def test_version_conflict_uses_friendly_message(self):
+        client = ApiClient("http://127.0.0.1:8000")
+        client.opener = Mock()
+        client.opener.open.side_effect = _http_error(409, {
+            "ok": False,
+            "error": {"code": "VERSION_CONFLICT", "message": "正式计划已变化"},
+        })
+
+        with self.assertRaises(ClientError) as ctx:
+            client.confirm_action("pv_1", "T03")
+
+        self.assertEqual(ctx.exception.code, "VERSION_CONFLICT")
+        self.assertIn("数据已变化", str(ctx.exception))
+
+    def test_confirm_sends_confirm_code(self):
+        client = ApiClient("http://127.0.0.1:8000")
+        with patch.object(client, "_request", return_value={"ok": True}) as mocked:
+            client.confirm_action("pv_1", "T03")
+
+        mocked.assert_called_once_with(
+            "POST", "/actions/pv_1/confirm", {"confirm_code": "T03"}
+        )
+
     def test_failed_backend_does_not_fall_back(self):
         client = ApiClient("http://127.0.0.1:8000")
         client.opener = Mock()
