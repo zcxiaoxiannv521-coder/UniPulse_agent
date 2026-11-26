@@ -237,6 +237,41 @@ python -m api.auth --user us_demo_a
 
 ---
 
+## 正式运行（production）检查清单
+
+本项目同时支持「本地演示」和「正式运行」，两者配置不同。对外提供服务前，逐条确认：
+
+| # | 检查项 | 正确做法 |
+|---|---|---|
+| 1 | 时间模式 | `UNIPULSE_TIME_MODE=real`（默认），**不要**设置 `UNIPULSE_DEMO_NOW` |
+| 2 | 认证模式 | 必须 `UNIPULSE_AUTH_MODE=production` |
+| 3 | Token 密钥 | 必须设置 `UNIPULSE_TOKEN_SECRET`（≥32 位随机），缺失会启动失败 |
+| 4 | 主机时区 | 服务器时区应为 `Asia/Shanghai`（数据库时间戳用 `localtime` 生成） |
+| 5 | 演示数据 | `demo/seed.py` 的数据锚定在 2026-11-30，**只用于演示**；正式环境请导入真实数据 |
+| 6 | 公网暴露 | **不要**以 `AUTH_MODE=demo` 对公网开放：演示密钥写在仓库里，任何人都能伪造 Token |
+
+启动示例：
+
+```bash
+export UNIPULSE_TIME_MODE=real
+export UNIPULSE_AUTH_MODE=production
+export UNIPULSE_TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+python -m uvicorn api.app:app --host 0.0.0.0 --port 8000
+```
+
+自查：
+
+```bash
+python -m services.clock     # 应显示 mode=real
+python -m api.auth --status  # 应显示 mode=production、密钥已配置
+```
+
+**已知限制：** 演示数据里考试在 2026-12-04、学习窗口在 11-30 ~ 12-02。
+真实日期超过这些时间点后，排程会返回 `EXAM_IN_PAST`、可用窗口会变少——
+这是数据问题，不是代码问题；演示请用 `UNIPULSE_TIME_MODE=demo`，正式运行请换真实数据。
+
+---
+
 ## 三人分工（V4 第 4 节）
 
 | 成员 | 负责 | 主要开发目录 |
