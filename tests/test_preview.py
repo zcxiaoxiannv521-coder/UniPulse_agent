@@ -6,11 +6,13 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from database.connection import get_connection, init_db
 from demo import seed as seed_module
-from services import clock, preview, scheduler
+from services import clock, goals as goals_service, preview, scheduler
 from services.preview import PreviewError
 
 
@@ -799,3 +801,218 @@ def test_exam_change_rejects_same_or_past_time(conn):
             conn=conn,
         )
     assert excinfo.value.code == "INVALID_EXAM_TIME"
+
+
+# ---------------------------------------------------------------- 目标版本一致性（B8）
+def _goal_payload(conn):
+    exam = conn.execute(
+        "SELECT id FROM exams WHERE user_id = ? LIMIT 1",
+        (seed_module.DEMO_USER_ID,),
+    ).fetchone()
+    return {
+        "title": "准备机器学习期末考试",
+        "scope": "第三章、第四章",
+        "event_id": exam["id"],
+        "daily_max_minutes": 60,
+        "availability": "每天 19:00 后",
+    }
+
+
+def _capacity(conn, preview_id):
+    row = conn.execute(
+        "SELECT capacity_json FROM previews WHERE id = ?", (preview_id,)
+    ).fetchone()
+    return json.loads(row["capacity_json"])
+
+
+def test_preview_stores_goal_version(conn):
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+    capacity = _capacity(conn, p["preview_id"])
+
+    goal = conn.execute(
+        "SELECT id, version FROM goals WHERE id = ?", (seed_module.GOAL_ID,)
+    ).fetchone()
+    assert capacity["goal_id"] == goal["id"]
+    assert capacity["goal_version"] == goal["version"]
+    assert p["goal_version"] == goal["version"]
+
+
+def test_exam_change_preview_stores_goal_version(conn):
+    detail = preview.create_exam_change_preview(
+        seed_module.DEMO_USER_ID, seed_module.EXAM_ID, "2026-12-02T14:00:00+08:00",
+        conn=conn,
+    )
+    capacity = _capacity(conn, detail["preview_id"])
+    assert capacity["goal_id"] == seed_module.GOAL_ID
+    assert capacity["goal_version"] == 1
+
+
+def test_confirm_ok_when_goal_unchanged(conn):
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+    result = preview.confirm_preview(
+        seed_module.DEMO_USER_ID, p["preview_id"], p["confirm_code"], conn=conn
+    )
+    assert result["ok"] is True
+
+
+def test_goal_change_blocks_old_preview(conn):
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+    goals_service.save_goal(
+        seed_module.DEMO_USER_ID, _goal_payload(conn), conn=conn
+    )
+
+    with pytest.raises(PreviewError) as excinfo:
+        preview.confirm_preview(
+            seed_module.DEMO_USER_ID, p["preview_id"], p["confirm_code"], conn=conn
+        )
+    assert excinfo.value.code == "GOAL_VERSION_CONFLICT"
+
+    # 预览仍是 pending，正式数据没有任何变化
+    row = conn.execute(
+        "SELECT status FROM previews WHERE id = ?", (p["preview_id"],)
+    ).fetchone()
+    assert row["status"] == "pending"
+    plan = _confirmed_plan(conn, seed_module.DEMO_USER_ID)
+    assert plan["version"] == 1
+
+
+def test_goal_change_blocks_without_plan_version_change(conn):
+    """计划版本没变，也不能绕过目标版本校验。"""
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+    goals_service.save_goal(seed_module.DEMO_USER_ID, _goal_payload(conn), conn=conn)
+
+    # 计划版本仍是 1
+    assert _confirmed_plan(conn, seed_module.DEMO_USER_ID)["version"] == 1
+
+    with pytest.raises(PreviewError) as excinfo:
+        preview.confirm_preview(
+            seed_module.DEMO_USER_ID, p["preview_id"], p["confirm_code"], conn=conn
+        )
+    assert excinfo.value.code == "GOAL_VERSION_CONFLICT"
+
+
+def test_goal_no_longer_active_blocks_preview(conn):
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+    with conn:
+        conn.execute(
+            "UPDATE goals SET status = 'paused' WHERE id = ?", (seed_module.GOAL_ID,)
+        )
+
+    with pytest.raises(PreviewError) as excinfo:
+        preview.confirm_preview(
+            seed_module.DEMO_USER_ID, p["preview_id"], p["confirm_code"], conn=conn
+        )
+    assert excinfo.value.code == "GOAL_VERSION_CONFLICT"
+
+
+def test_legacy_preview_without_goal_version_rejected(conn):
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+    capacity = _capacity(conn, p["preview_id"])
+    capacity.pop("goal_version", None)
+    with conn:
+        conn.execute(
+            "UPDATE previews SET capacity_json = ? WHERE id = ?",
+            (json.dumps(capacity), p["preview_id"]),
+        )
+
+    with pytest.raises(PreviewError) as excinfo:
+        preview.confirm_preview(
+            seed_module.DEMO_USER_ID, p["preview_id"], p["confirm_code"], conn=conn
+        )
+    assert excinfo.value.code == "GOAL_VERSION_CONFLICT"
+
+
+def test_new_preview_uses_latest_goal(conn):
+    goals_service.save_goal(seed_module.DEMO_USER_ID, _goal_payload(conn), conn=conn)
+    goal = conn.execute(
+        "SELECT version FROM goals WHERE id = ?", (seed_module.GOAL_ID,)
+    ).fetchone()
+
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+    assert p["goal_version"] == goal["version"] == 2
+
+    result = preview.confirm_preview(
+        seed_module.DEMO_USER_ID, p["preview_id"], p["confirm_code"], conn=conn
+    )
+    assert result["ok"] is True
+
+
+def test_goal_change_prevents_reuse(conn):
+    first = preview.create_preview(
+        seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn
+    )
+    goals_service.save_goal(seed_module.DEMO_USER_ID, _goal_payload(conn), conn=conn)
+
+    second = preview.create_preview(
+        seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn
+    )
+
+    assert second["preview_id"] != first["preview_id"]
+    assert second["reused"] is False
+    assert second["goal_version"] == 2
+
+
+def test_two_exams_goal_versions_do_not_mix(conn):
+    with conn:
+        conn.execute(
+            "INSERT INTO exams (id, user_id, name, exam_date, start_time) "
+            "VALUES ('ex_two', ?, '另一场考试', '2026-12-09', '09:00')",
+            (seed_module.DEMO_USER_ID,),
+        )
+        conn.execute(
+            "INSERT INTO goals (id, user_id, exam_id, title, daily_limit_minutes, "
+            "status, version) VALUES ('gl_two', ?, 'ex_two', '另一目标', 60, 'active', 1)",
+            (seed_module.DEMO_USER_ID,),
+        )
+
+    p1 = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+
+    # 改另一场考试的目标，不应影响第一场考试的预览
+    goals_service.save_goal(
+        seed_module.DEMO_USER_ID,
+        {"title": "另一目标", "scope": "", "event_id": "ex_two",
+         "daily_max_minutes": 30, "availability": ""},
+        conn=conn,
+    )
+
+    result = preview.confirm_preview(
+        seed_module.DEMO_USER_ID, p1["preview_id"], p1["confirm_code"], conn=conn
+    )
+    assert result["ok"] is True
+
+
+def test_goal_conflict_leaves_all_tables_untouched(conn):
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+    goals_service.save_goal(seed_module.DEMO_USER_ID, _goal_payload(conn), conn=conn)
+
+    tables = ["plans", "plan_items", "exams", "reminders", "previews"]
+    before = {
+        table: [tuple(r) for r in conn.execute(f"SELECT * FROM {table}")]
+        for table in tables
+    }
+
+    with pytest.raises(PreviewError):
+        preview.confirm_preview(
+            seed_module.DEMO_USER_ID, p["preview_id"], p["confirm_code"], conn=conn
+        )
+
+    after = {
+        table: [tuple(r) for r in conn.execute(f"SELECT * FROM {table}")]
+        for table in tables
+    }
+    assert before == after
+
+
+def test_repeat_confirm_after_goal_change_is_still_idempotent(conn):
+    p = preview.create_preview(seed_module.DEMO_USER_ID, seed_module.EXAM_ID, conn=conn)
+    first = preview.confirm_preview(
+        seed_module.DEMO_USER_ID, p["preview_id"], p["confirm_code"], conn=conn
+    )
+    goals_service.save_goal(seed_module.DEMO_USER_ID, _goal_payload(conn), conn=conn)
+
+    again = preview.confirm_preview(
+        seed_module.DEMO_USER_ID, p["preview_id"], p["confirm_code"], conn=conn
+    )
+
+    assert again["duplicate"] is True
+    assert again["applied"]["plan_version"] == first["applied"]["plan_version"]

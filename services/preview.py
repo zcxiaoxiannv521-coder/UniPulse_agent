@@ -332,12 +332,13 @@ def _find_reusable(
     conn: sqlite3.Connection,
     user_id: str,
     goal_id: str,
+    goal_version: int,
     base_plan_id: str | None,
     base_version: int,
     diff_json: str,
     now: datetime,
 ) -> sqlite3.Row | None:
-    """同样的基础版本 + 同样的差异 → 复用已有草稿，避免重复刷编号。"""
+    """基础版本、目标版本、差异都相同才复用；目标改过就必须重新算。"""
     rows = conn.execute(
         """
         SELECT * FROM previews
@@ -351,8 +352,14 @@ def _find_reusable(
         expires = _parse_dt(row["expires_at"])
         if expires is not None and expires <= now:
             continue
-        if row["diff_json"] == diff_json:
-            return row
+        if row["diff_json"] != diff_json:
+            continue
+        stored = json.loads(row["capacity_json"] or "{}")
+        if stored.get("goal_id") != goal_id:
+            continue
+        if stored.get("goal_version") != goal_version:
+            continue
+        return row
     return None
 
 
@@ -376,6 +383,8 @@ def _render(row: sqlite3.Row, now: datetime, reused: bool = False) -> dict:
         "status": _effective_status(row, now),
         "base_plan_id": row["base_plan_id"],
         "base_version": row["base_version"],
+        "goal_id": capacity.get("goal_id") or row["goal_id"],
+        "goal_version": capacity.get("goal_version"),
         "created_at": row["created_at"],
         "expires_at": row["expires_at"],
         "confirmed_at": row["confirmed_at"],
@@ -503,6 +512,8 @@ def create_preview(
         capacity_json = json.dumps(
             {
                 "exam": schedule["exam"],
+                "goal_id": schedule["goal_id"],
+                "goal_version": schedule["goal_version"],
                 "old_plan": _old_plan_snapshot(plan, old_items),
                 "windows": schedule["windows"],
                 "schedule_items": schedule["schedule_items"],
@@ -517,8 +528,8 @@ def create_preview(
         diff_json = json.dumps(diff, ensure_ascii=False, sort_keys=True)
 
         reusable = _find_reusable(
-            db, user_id, schedule["goal_id"], base_plan_id, base_version,
-            diff_json, now,
+            db, user_id, schedule["goal_id"], schedule["goal_version"],
+            base_plan_id, base_version, diff_json, now,
         )
         if reusable is not None:
             return _render(reusable, now, reused=True)
@@ -642,6 +653,8 @@ def create_exam_change_preview(
         capacity_json = json.dumps(
             {
                 "exam": schedule["exam"],
+                "goal_id": schedule["goal_id"],
+                "goal_version": schedule["goal_version"],
                 "proposed_exam": proposed,
                 "old_plan": _old_plan_snapshot(plan, old_items),
                 "windows": schedule["windows"],
@@ -749,6 +762,8 @@ def assert_confirmable(
                 "PREVIEW_NOT_PENDING", f"预览当前状态是 {status}，不能确认"
             )
 
+        _ensure_goal_version(db, user_id, row, json.loads(row["capacity_json"] or "{}"))
+
         plan = _load_current_plan(db, user_id)
         current_version = int(plan["version"]) if plan else 0
         current_id = plan["id"] if plan else None
@@ -801,6 +816,40 @@ def _ensure_version(db: sqlite3.Connection, user_id: str, row: sqlite3.Row) -> s
             f"正式计划已变化（当前 v{current_version}，预览基于 v{row['base_version']}），请重新生成预览",
         )
     return plan
+
+
+def _ensure_goal_version(
+    db: sqlite3.Connection,
+    user_id: str,
+    row: sqlite3.Row,
+    capacity: dict,
+) -> None:
+    """确认时目标必须还是预览生成时那一版，且仍然 active。"""
+    goal_id = capacity.get("goal_id") or row["goal_id"]
+    goal_version = capacity.get("goal_version")
+
+    if not goal_id or goal_version is None:
+        raise PreviewError(
+            "GOAL_VERSION_CONFLICT",
+            "这条预览没有记录目标版本，无法安全确认，请重新生成预览。",
+        )
+
+    goal = db.execute(
+        "SELECT id, version FROM goals "
+        "WHERE user_id = ? AND id = ? AND status = 'active'",
+        (user_id, goal_id),
+    ).fetchone()
+
+    if goal is None:
+        raise PreviewError(
+            "GOAL_VERSION_CONFLICT",
+            "学习目标已被删除或不再有效，请重新生成预览后确认。",
+        )
+    if int(goal["version"]) != int(goal_version):
+        raise PreviewError(
+            "GOAL_VERSION_CONFLICT",
+            "学习目标已发生变化，请重新生成预览后确认。",
+        )
 
 
 def _insert_plan(
@@ -1015,6 +1064,7 @@ def confirm_preview(
             if _effective_status(fresh, now) != "pending":
                 raise PreviewError("PREVIEW_NOT_PENDING", "预览状态已变化，确认未生效")
             current_plan = _ensure_version(db, user_id, fresh)
+            _ensure_goal_version(db, user_id, fresh, capacity)
 
             proposed = capacity.get("proposed_exam")
             exam_change = None

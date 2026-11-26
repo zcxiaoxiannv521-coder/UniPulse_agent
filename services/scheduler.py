@@ -661,6 +661,7 @@ def generate_schedule(
             "cutoff_at": _iso(exam_start),
         },
         "goal_id": goal["id"],
+        "goal_version": int(goal["version"]),
         "daily_limit_minutes": daily_limit,
         "plan": {"id": plan["id"], "version": plan["version"]} if plan else None,
         "windows": window_views,
