@@ -888,3 +888,53 @@ def test_add_class_invalid_time(client):
 
     assert resp.status_code == 422
     assert resp.json()["error"]["code"] == "INVALID_TIME"
+
+
+# ---------------------------------------------------------------- 目标版本冲突
+def test_confirm_blocked_after_goal_change(client, db_path):
+    created = client.post(
+        "/v1/previews",
+        json={"event_id": seed_module.EXAM_ID, "new_start": "2026-12-02T14:00:00+08:00"},
+        headers=_headers(),
+    ).json()["data"]
+
+    conn = get_connection(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "UPDATE goals SET version = version + 1, updated_at = datetime('now','localtime') "
+                "WHERE id = ?",
+                (seed_module.GOAL_ID,),
+            )
+    finally:
+        conn.close()
+
+    resp = client.post(
+        f"/v1/actions/{created['id']}/confirm",
+        json={"confirm_code": created["confirm_code"]},
+        headers=_headers(),
+    )
+
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["error"]["code"] == "GOAL_VERSION_CONFLICT"
+    assert "重新生成预览" in body["error"]["message"]
+
+    conn = get_connection(db_path)
+    try:
+        exam = conn.execute(
+            "SELECT exam_date FROM exams WHERE id = ?", (seed_module.EXAM_ID,)
+        ).fetchone()
+        plan = conn.execute(
+            "SELECT version FROM plans WHERE status = 'confirmed'"
+        ).fetchone()
+        preview = conn.execute(
+            "SELECT status FROM previews WHERE id = ?", (created["id"],)
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert exam["exam_date"] == "2026-12-04"     # 考试没被改
+    assert plan["version"] == 1                  # 计划没被改
+    assert preview["status"] == "pending"        # 预览没有被误标 confirmed

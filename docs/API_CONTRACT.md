@@ -846,6 +846,15 @@ B 增加一层薄适配。它不重复业务逻辑：全部调用 `services/`，
 
 两者成功后 `GET /v1/workspace` 的 `tasks[].actual_minutes` 立刻反映 `task_logs` 的累计值。
 
+**预览与目标版本（2026-11-26 起）：**
+
+- 创建预览时会把当前 `goal_id` + `goal_version` 存进 `previews.capacity_json`
+- 复用旧预览要求 `base_plan_id`、`base_version`、`goal_id`、`goal_version`、`diff` 全部一致
+- 确认时在事务内重新查询 active goal 并比较版本；不一致返回 409 `GOAL_VERSION_CONFLICT`
+- 目标被删除/停用同样拒绝
+- **已确认**的预览重复确认仍走幂等逻辑，不会因为目标后来变化而变成失败
+- 缺少 `goal_version` 的历史预览视为无法安全确认，要求重新生成
+
 **请求体（创建预览）：**
 
 ```json
@@ -993,6 +1002,7 @@ V4 硬性要求：「网页校验访问者与企微用户的绑定关系，不�
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | v0.1 | 2026-11-20 | 初稿：按 V4 第 3 节定义 A/B/C 三个角色、7 个服务函数、9 个 HTTP 接口、8 个错误码 |
+| v0.8 | 2026-11-26 | 预览记录目标版本；目标变更后旧 pending 预览确认返回 409 `GOAL_VERSION_CONFLICT` |
 | v0.7 | 2026-11-25 | 新增 `/v1/goals`、`/v1/classes`；目标的 scope/availability 存入 `user_preferences`（scope=goal:<id>） |
 | v0.6 | 2026-11-24 | 新增 `/v1/tasks/{id}/progress`、`/v1/tasks/{id}/time`；新增 `task_logs` 表存累计用时（增量）与反馈 |
 | v0.5 | 2026-11-21 | 新增 `POST /v1/notices`；预览的 `source_notice_ids` 增加归属校验；workspace 字段按 C 的严格类型校验补齐（`channel`、`source`、`tasks.version` 等） |
