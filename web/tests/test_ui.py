@@ -2,7 +2,7 @@ from copy import deepcopy
 import os
 from pathlib import Path
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from streamlit.testing.v1 import AppTest
 
@@ -56,6 +56,37 @@ class PageTests(unittest.TestCase):
 
         app.sidebar.radio(key="page").set_value("计划").run()
         self.assertFalse(app.exception)
+
+    def test_api_mode_week_uses_backend_time(self):
+        """浏览器在 11/26，但后端 generated_at 是 11/30：课表要按后端周显示。"""
+        state = initial_workspace()
+        state["generated_at"] = "2026-11-30T09:00:00+08:00"
+        fake = Mock()
+        fake.is_demo = False
+        fake.snapshot.return_value = state
+
+        with patch("web.client.make_client", return_value=fake):
+            app = AppTest.from_file(str(APP), default_timeout=45).run()
+
+        self.assertFalse(app.exception)
+        captions = "\n".join(c.value for c in app.caption)
+        self.assertIn("11 月 30 日 至 12 月 06 日", captions)
+        text = "\n".join(m.value for m in app.markdown)
+        self.assertIn("高等数学", text)
+
+    def test_api_mode_missing_generated_at_is_reported(self):
+        state = initial_workspace()
+        state.pop("generated_at", None)
+        fake = Mock()
+        fake.is_demo = False
+        fake.snapshot.return_value = state
+
+        with patch("web.client.make_client", return_value=fake):
+            app = AppTest.from_file(str(APP), default_timeout=45).run()
+
+        self.assertFalse(app.exception)
+        errors = "\n".join(e.value for e in app.error)
+        self.assertIn("无法确定本周日期范围", errors)
 
     def test_all_four_pages_render(self):
         for label in ['首页','课表','计划','任务']:

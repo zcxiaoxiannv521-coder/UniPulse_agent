@@ -37,6 +37,37 @@ def parse_time(value):
         raise ClientError("日期必须完整并包含时区。") from exc
 
 
+def workspace_now(workspace, is_demo):
+    """页面使用的"当前时间"。
+
+    演示模式用 fixture 里的 demo_now；API 模式必须用后端返回的 generated_at，
+    不能使用浏览器时间——后端可能跑在演示时钟上（例如 2026-11-30）。
+    """
+    if not isinstance(workspace, dict):
+        raise ClientError("工作台数据格式不正确。")
+
+    if is_demo:
+        raw, label = workspace.get("demo_now"), "演示时间"
+    else:
+        raw, label = workspace.get("generated_at"), "后端生成时间"
+
+    if not isinstance(raw, str) or not raw.strip():
+        raise ClientError("工作台缺少" + label + "，无法确定本周日期范围。")
+    try:
+        value = parse_time(raw)
+    except ClientError as exc:
+        raise ClientError(
+            label + "格式不正确（" + raw[:40] + "），无法确定本周日期范围。"
+        ) from exc
+    return value.astimezone(TZ)
+
+
+def week_bounds(day):
+    """返回包含 day 的周一和周日（按 day 所在时区的日期）。"""
+    monday = day - timedelta(days=day.weekday())
+    return monday, monday + timedelta(days=6)
+
+
 def initial_workspace():
     return json.loads(FIXTURE.read_text(encoding="utf-8"))
 

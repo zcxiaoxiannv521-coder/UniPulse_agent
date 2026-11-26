@@ -1,12 +1,13 @@
 from copy import deepcopy
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import io
 import json
 import unittest
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError, URLError
 
-from web.client import ApiClient, ClientError, DemoClient, TZ, initial_workspace
+from web.client import (ApiClient, ClientError, DemoClient, TZ, initial_workspace,
+                        week_bounds, workspace_now)
 
 
 class DemoTests(unittest.TestCase):
@@ -97,6 +98,73 @@ class DemoTests(unittest.TestCase):
 def _http_error(code, payload):
     return HTTPError("http://127.0.0.1:8000/v1/x", code, "err", {},
                      io.BytesIO(json.dumps(payload).encode()))
+
+
+class TimeBaseTests(unittest.TestCase):
+    """时间基准：API 模式用后端 generated_at，演示模式用 demo_now。"""
+
+    def test_api_mode_uses_generated_at(self):
+        state = initial_workspace()
+        state["generated_at"] = "2026-11-30T09:00:00+08:00"
+
+        value = workspace_now(state, False)
+
+        self.assertEqual(value.date(), date(2026, 11, 30))
+        self.assertEqual(value.utcoffset(), timedelta(hours=8))
+
+    def test_api_mode_ignores_demo_now(self):
+        """API 模式即使 fixture 里带 demo_now，也必须用 generated_at。"""
+        state = initial_workspace()
+        state["generated_at"] = "2026-12-02T08:00:00+08:00"
+
+        self.assertEqual(workspace_now(state, False).date(), date(2026, 12, 2))
+
+    def test_demo_mode_still_uses_demo_now(self):
+        state = initial_workspace()
+        state["generated_at"] = "2030-01-01T00:00:00+08:00"
+
+        self.assertEqual(workspace_now(state, True).date(), date(2026, 11, 30))
+
+    def test_generated_at_timezone_is_converted(self):
+        state = initial_workspace()
+        state["generated_at"] = "2026-11-30T23:30:00-05:00"
+
+        value = workspace_now(state, False)
+
+        # 23:30 -05:00 = 次日 12:30 +08:00
+        self.assertEqual(value.date(), date(2026, 12, 1))
+        self.assertEqual(value.hour, 12)
+
+    def test_generated_at_missing_is_explicit(self):
+        state = initial_workspace()
+        state.pop("generated_at", None)
+
+        with self.assertRaisesRegex(ClientError, "无法确定本周日期范围"):
+            workspace_now(state, False)
+
+    def test_generated_at_invalid_is_explicit(self):
+        state = initial_workspace()
+        state["generated_at"] = "不是时间"
+
+        with self.assertRaisesRegex(ClientError, "格式不正确"):
+            workspace_now(state, False)
+
+    def test_week_bounds(self):
+        monday, sunday = week_bounds(date(2026, 11, 30))     # 周一
+        self.assertEqual((monday, sunday), (date(2026, 11, 30), date(2026, 12, 6)))
+
+        monday, sunday = week_bounds(date(2026, 12, 6))      # 周日
+        self.assertEqual((monday, sunday), (date(2026, 11, 30), date(2026, 12, 6)))
+
+    def test_week_bounds_cross_year(self):
+        monday, sunday = week_bounds(date(2027, 1, 1))       # 周五，跨年
+        self.assertEqual(monday, date(2026, 12, 28))
+        self.assertEqual(sunday, date(2027, 1, 3))
+
+    def test_week_bounds_cross_month(self):
+        monday, sunday = week_bounds(date(2026, 3, 1))       # 周日，跨月
+        self.assertEqual(monday, date(2026, 2, 23))
+        self.assertEqual(sunday, date(2026, 3, 1))
 
 
 class ApiTests(unittest.TestCase):

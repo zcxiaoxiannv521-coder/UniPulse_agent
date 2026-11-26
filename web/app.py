@@ -13,7 +13,8 @@ if repo_root not in sys.path:
 
 import streamlit as st
 
-from web.client import ClientError, TZ, initial_workspace, make_client, parse_time
+from web.client import (ClientError, TZ, initial_workspace, make_client,
+                        parse_time, week_bounds, workspace_now)
 from web.view_model import agenda_for_day, plan_is_current
 
 st.set_page_config(page_title="UniPulse · 中大校园工作台", page_icon="🎓", layout="wide", initial_sidebar_state="expanded")
@@ -86,7 +87,12 @@ except ClientError as exc:
             st.rerun()
     st.stop()
 
-now = parse_time(workspace["demo_now"]) if client.is_demo else datetime.now(TZ)
+# API 模式必须用后端 generated_at（可能是演示时钟），不能用浏览器时间
+try:
+    now = workspace_now(workspace, client.is_demo)
+except ClientError as exc:
+    st.error(str(exc))
+    st.stop()
 today, version = now.astimezone(TZ).date(), workspace["version"]
 events = {e["id"]: e for e in workspace["events"]}
 notices = {n["id"]: n for n in workspace["notices"]}
@@ -187,7 +193,7 @@ def render_agenda(day):
 
 
 def week_table():
-    monday = today-timedelta(days=today.weekday())
+    monday, _ = week_bounds(today)
     days = [monday+timedelta(days=i) for i in range(7)]
     st.caption(f"{days[0]:%m 月 %d 日} 至 {days[-1]:%m 月 %d 日} · 具体日期课程")
     heads = '<th>时间</th>'+''.join(f'<th class="{"today" if d==today else ""}">{WEEKDAYS[d.weekday()]}<br>{d:%m.%d}</th>' for d in days)
@@ -220,7 +226,9 @@ def preview_card(action):
         with st.expander("核对通知原文"):
             sources(action["source_notice_ids"])
         stale = action["expected_version"] != version
-        expired = datetime.now(TZ) >= parse_time(action["expires_at"])
+        # 演示模式的预览是按真实时钟生成的，用真实时间比较；API 模式跟随后端时间
+        expiry_now = datetime.now(TZ) if client.is_demo else now
+        expired = expiry_now >= parse_time(action["expires_at"])
         if stale or expired:
             st.warning("此预览已过时或过期，请重新生成。")
         if st.button("确认本次调整", key="apply_"+action["id"], disabled=stale or expired, type="primary"):
