@@ -1,53 +1,114 @@
-# web/ —— 成员 C 的工作区（个人看板）
+# web/ —— 成员 C 的工作区（桌面个人看板）
 
-手机可读的个人看板，用 **Streamlit** 实现（V4 第 3.1 节指定）。
+> **状态：** 桌面网页与 B 后端已整合到 dev，HTTP 业务链路已验证；Agent 与企微尚未实现。
+> **范围：** 首页、课表、计划、任务；左侧导航；最终结果优先，处理记录默认收起。  
+> **依据：** V4 方案，以及用户后续确认的“电脑端优先、手机端暂缓”。
 
-## 启动
+---
+
+## 1. 当前完成了什么
+
+| 页面 | 功能 |
+|---|---|
+| 首页 | 本周课表、最近课程/截止、当前计划、任务概览、待确认与最近修改结果 |
+| 课表 | 周课表与按日查看、具体日期课程录入、冲突校验 |
+| 计划 | 正式/旧计划区分、来源证据、改期预览、确认/取消、备用目标与对话入口 |
+| 任务 | 筛选、仅记录用时、明确进度反馈；不把时长推断为完成比例 |
+
+默认使用 `fixtures/workspace.json`，只修改本次网页演示会话，不访问 B 的数据库，不启动机器人，不虚构模型/工具调用或消息送达。
+
+---
+
+## 2. 目录结构
+
+```text
+web/
+├── app.py                 # Streamlit 界面
+├── client.py              # DemoClient + 历史 ApiClient 草案
+├── view_model.py          # 展示组织、有效版本判断、有限样例核对
+├── fixtures/workspace.json# C 的独立脱敏样例，不替代 B 的 demo/seed
+├── tests/                 # 网页功能检查，与 B 的根 tests 分开
+├── .streamlit/config.toml # 中大深绿白底主题
+├── requirements.txt       # C 的依赖，不改 B 的根 requirements
+├── .env.example
+├── 启动网页.command       # Mac 启动入口
+├── API_CONTRACT.md        # C 独立接口草案，不是仓库统一协议
+├── docs/
+│   ├── DESKTOP_HANDOFF.md  # 启动、数据准备和人工稳定性检查
+│   ├── INTEGRATION_NOTES.md# 与 B 契约的差异，待协商
+│   ├── FILE_MANIFEST.md   # 本次提交资料索引与哈希
+│   └── plans/             # V2/V3/V4 方案参考
+└── archive/
+    ├── prototypes/        # 历史 HTML 原型，交互是本地模拟
+    ├── mockups/           # 历史排版效果图，不是运行截图
+    └── packages/          # 历史独立交付包，不是当前仓库运行入口
+```
+
+---
+
+## 3. 启动
+
+从**仓库根目录**运行：
 
 ```bash
-cd UniPulse_agent            # 克隆下来的文件夹
-source .venv/bin/activate
-python -m pip install -r requirements-web.txt    # 比 requirements.txt 多一个 streamlit
-streamlit run web/app.py
+python3 -m venv .venv
+source .venv/bin/activate           # Windows: .venv\Scripts\activate
+python -m pip install -r web/requirements.txt   # 等价于根目录的 requirements-web.txt
+cd web
+python -m streamlit run app.py
 ```
 
-## 数据从哪来
+进入 web 启动可读到 `web/.streamlit/config.toml` 的主题。Mac 创建环境后也可双击 `web/启动网页.command`。不需要额外导入资料、模型密钥或企微凭据。
 
-**只通过 HTTP 调后端**，不直接连数据库：
+使用 Python 3.11+，已在 Python 3.12 / Streamlit 1.67.0 验证。此处不提交 `.venv`，换机器需按依赖文件安装。
 
-```python
-import httpx
+---
 
-resp = httpx.get("http://127.0.0.1:8000/api/v1/dashboard", params={"token": token})
-data = resp.json()
+## 4. 测试
+
+从**仓库根目录**运行：
+
+```bash
+python -m pip install -r requirements.txt -r web/requirements.txt
+python -m pytest -q
 ```
 
-接口清单、字段、错误结构见 `docs/API_CONTRACT.md` 第 3、5 节。
-后端启动：`python -m uvicorn api.app:app --port 8000`。
+仅检查 C 的网页：
 
-## token 从哪来
-
-用户从企微点开的链接形如：
-
-```
-http://<看板地址>/?token=eyJ...
+```bash
+python -m unittest discover -s web/tests -v
 ```
 
-Streamlit 用 `st.query_params["token"]` 取到，原样转发给后端。
-**不要**自己解析 token，也不要接受任何 `user_id` 参数——身份判断只在后端做。
+2026-11-28 在整合后的内容上运行 `pytest -q`：**292 passed，另有 7 个子检查通过**，包含 B 的 241 项测试和 C 的 51 项测试。第三方 TestClient 有 1 条弃用提示，未造成测试失败。真实浏览器视觉、长时间稳定性和正式跨用户隔离仍不能只靠这些检查证明。
 
-## 页面结构（V4 第 2 节）
+---
 
-1. 顶部：下一节课、最近截止、待确认提示（黄色提示条）
-2. 中间：按日期分组的课程 / 考试 / 学习时间块
-3. 下方：待办与进度
-4. 展开区：通知来源、计划改动前后对比
+## 5. 与 A/B 怎么对接
 
-## 两条硬要求
+统一契约参考 [`../docs/API_CONTRACT.md`](../docs/API_CONTRACT.md)，不能用 C 的旧草案替换 B 的文档。
 
-- **未确认的草稿单独标记**，不能渲染成正式安排（后端已经把 `pending_changes` 和 `plan` 分开）
-- 链接里不能出现明文 `user_id`，页面不能因为拿到别人的链接就显示别人的数据
+B 已实现 `/v1/*` 兼容接口（`GET /v1/workspace`、通知、预览、确认、取消、任务进度/用时、目标与课表录入），
+C 的 `ApiClient` 已与这些接口对齐；`api/compat.py` 负责把 `/v1` 的 `{ok:true,data}` 信封映射到 B 的服务层。
 
-## 演示
+联调模式：
 
-12/6 用固定的 11-30 场景（见 `demo/README.md`）。数据由 B 的 `demo/seed.py` 重置，C 只读不改。
+```bash
+export UNIPULSE_API_BASE=http://127.0.0.1:8000
+export UNIPULSE_LOCAL_TEST=1
+export UNIPULSE_API_TOKEN=<B 签发的测试 Token>
+```
+
+不设 `UNIPULSE_API_BASE` 时仍是本地演示模式（`fixtures/workspace.json`）。
+两条链路共用同一份页面代码，页面顶部会明确标注当前是"演示数据"还是"共享后端模式"。
+接口契约见 [`../docs/API_CONTRACT.md`](../docs/API_CONTRACT.md)（第 5.12 节为 `/v1` 兼容层）。
+
+---
+
+## 6. 用户接下来要做什么
+
+1. **先体验内置样例。** 不需要导入，先检查四页和改期取消/确认。
+2. **人工检查电脑浏览器。** 连续切换/保存、重复点击、放置后继续、窗口与缩放；问题记录页面、步骤、预期/实际结果与浏览器。
+3. **准备脱敏资料。** 一周具体日期课表、明确考试通知、必做/选做任务、剩余估时与允许时段。当前没有 Excel/PDF 批量导入。
+4. **使用已有 B 接口进行浏览器验收。** 按固定演示时钟核对页面和数据库结果；Agent 与企微接入仍待 A 完成，手机联调后置。
+
+完整步骤及已知边界见 [`docs/DESKTOP_HANDOFF.md`](docs/DESKTOP_HANDOFF.md)。历史 HTML、效果图和 zip 仅用于追溯设计，当前实现看 `web/app.py`。

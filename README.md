@@ -27,10 +27,13 @@
 | 第三阶段·通知 | `POST /v1/notices` + 演示通知 | ✅ 完成 |
 | 第三阶段·进度 | 任务进度与用时记录（`task_logs`） | ✅ 完成 |
 | 第三阶段·录入 | 目标与课表录入（`/v1/goals`、`/v1/classes`） | ✅ 完成 |
-| 第三阶段·待做 | 提醒排期、写接口（goals/classes/progress） | ⬜ 未开始 |
-| 第四阶段 | 企微接入（A）、看板（C）、联调 | ⬜ 未开始 |
+| 第三阶段·待做 | 提醒实际排期与发送 | ⬜ 未完成；目标/课表/进度写接口已实现 |
+| 第四阶段·网页 | C 的四页桌面看板与 B 的兼容接口 | ✅ 已整合到 dev，自动测试和 HTTP 检查通过 |
+| 第四阶段·Agent | A 的 Agent 调度与企微接入 | ⬜ 尚无实现代码 |
 
-**现在仓库里没有排程算法、没有 Agent、没有企微代码。** 这是故意的——先把时间基准、演示数据、只读接口对齐，再写会改数据的逻辑。
+**当前 dev 已包含规则排程、预览确认、后端兼容接口及 C 的桌面网页；Agent 调度与企微接入尚未实现。**
+
+2026-11-28 整合验证与剩余边界见 [`docs/INTEGRATION_20261128.md`](docs/INTEGRATION_20261128.md)。
 
 ---
 
@@ -75,7 +78,7 @@ unipulse/
 └── README.md
 ```
 
-`agent/`、`integrations/`、`web/` 现在只有 README，**空目录占位是为了让三个人一拉代码就知道自己该在哪干活**，里面没有实现代码。
+`agent/`、`integrations/` 仍只有 README；`web/` 已有 C 的 Streamlit 实现。按用户确认，优先电脑网页，手机端暂缓。
 
 ---
 
@@ -128,7 +131,23 @@ python -m uvicorn api.app:app --reload --port 8000
 python -m pytest -q
 ```
 
-应看到 `228 passed`。
+本次整合验证结果：`292 passed`，另有 7 个子检查通过。测试数量随后续新增用例变化。
+
+### 4.1 启动 C 网页
+
+另开终端，在仓库根目录安装网页依赖：
+
+```bash
+source .venv/bin/activate
+python -m pip install -r requirements-web.txt
+export UNIPULSE_API_BASE=http://127.0.0.1:8000
+cd web
+python -m streamlit run app.py
+```
+
+网页凭据框填写 `python -m api.auth --user us_demo_a` 签发的测试 Token，不提交到仓库。
+固定场景先按下方时间模式配置 demo 时钟、运行 `python -m demo.seed`，再启动后端。
+不设置 `UNIPULSE_API_BASE` 则使用明确标注的本地演示，不会在后端失败时自动回退。
 
 ### 5. 查看数据库
 
