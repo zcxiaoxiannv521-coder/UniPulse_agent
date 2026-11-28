@@ -16,9 +16,12 @@ import streamlit as st
 from web.client import (ClientError, TZ, initial_workspace, make_client,
                         parse_time, week_bounds, workspace_now)
 from web.view_model import agenda_for_day, plan_is_current
+from web.i18n import status_label, system_text, change_value
 
-st.set_page_config(page_title="UniPulse · 中大校园工作台", page_icon="🎓", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="中大校园工作台", page_icon="🎓", layout="wide", initial_sidebar_state="expanded")
+st.html("<script>" + (Path(__file__).parent / "assets" / "zh-CN.js").read_text(encoding="utf-8") + "</script>", unsafe_allow_javascript=True)
 st.markdown("""<style>
+[data-testid="stToolbar"]{display:none!important}
 .block-container{max-width:1480px;padding-top:1.8rem;padding-bottom:2.5rem}
 [data-testid="stSidebar"]{background:#edf3ef;border-right:1px solid #d9e5dd}
 h1,h2,h3{color:#164b35}h1{font-size:2rem!important}
@@ -32,7 +35,6 @@ h1,h2,h3{color:#164b35}h1{font-size:2rem!important}
 @media(max-width:900px){.block-container{padding:1rem}.school-name{font-size:1.5rem}}
 </style>""", unsafe_allow_html=True)
 
-STATUS = {"todo":"待开始","doing":"进行中","partial":"部分完成","done":"已完成","active":"执行中","needs_review":"待检查","needs_adjustment":"计划待调整","confirmed":"已确认","completed":"已完成","pending":"待处理","invalidated":"已失效","cancelled":"已取消","applied":"已应用"}
 WEEKDAYS = ["周一","周二","周三","周四","周五","周六","周日"]
 
 
@@ -43,10 +45,10 @@ def human(value):
 def run_action(fn, *args):
     try:
         result = fn(*args)
-        st.session_state["flash"] = result.get("message", "操作已完成。")
+        st.session_state["flash"] = system_text(result.get("message", "操作已完成。"))
         st.rerun()
     except ClientError as exc:
-        st.error(str(exc))
+        st.error(system_text(exc))
 
 
 def reset_demo():
@@ -60,7 +62,7 @@ def change_page(name):
     st.session_state["page"] = name
 
 
-st.markdown('<div class="school-head"><div><div class="school-name">中山大学 · UniPulse</div><div class="school-en">SUN YAT-SEN UNIVERSITY · CAMPUS WORKSPACE</div></div><div class="motto">博学 · 审问 · 慎思 · 明辨 · 笃行</div></div>', unsafe_allow_html=True)
+st.markdown('<div class="school-head"><div><div class="school-name">中山大学 · 校园智能助手</div><div class="school-en">个人校园事务工作台</div></div><div class="motto">博学 · 审问 · 慎思 · 明辨 · 笃行</div></div>', unsafe_allow_html=True)
 api_mode = bool(os.getenv("UNIPULSE_API_BASE", "").strip())
 if api_mode and not st.session_state.get("api_token") and not (os.getenv("UNIPULSE_LOCAL_TEST") == "1" and os.getenv("UNIPULSE_API_TOKEN")):
     st.info("后端联调模式：请提供本次会话的测试访问凭据。")
@@ -76,9 +78,9 @@ try:
     client = make_client(st.session_state)
     workspace = client.snapshot()
 except ClientError as exc:
-    st.error(str(exc))
+    st.error(system_text(exc))
     if not api_mode:
-        if st.button("恢复 V4 示例"):
+        if st.button("恢复第4版示例"):
             reset_demo()
     else:
         st.caption("未使用演示数据替代后端结果。")
@@ -91,7 +93,7 @@ except ClientError as exc:
 try:
     now = workspace_now(workspace, client.is_demo)
 except ClientError as exc:
-    st.error(str(exc))
+    st.error(system_text(exc))
     st.stop()
 today, version = now.astimezone(TZ).date(), workspace["version"]
 events = {e["id"]: e for e in workspace["events"]}
@@ -102,7 +104,7 @@ goal = next(iter(goals_by_id.values())) if goals_by_id else None
 pending = [a for a in workspace["pending"] if a["status"] == "pending"]
 active_tasks = [t for t in tasks if t["status"] != "done" and t.get("included", True)]
 with st.sidebar:
-    st.title("UniPulse")
+    st.title("校园智能助手")
     st.caption("中大校园 · 智能相伴")
     page = st.radio("工作台导航", ["首页", "课表", "计划", "任务"], key="page")
     if len(goals_by_id) > 1:
@@ -113,24 +115,24 @@ with st.sidebar:
         goal = goals_by_id[chosen]
     st.divider()
     st.write(workspace["profile"]["display_name"])
-    st.caption("演示模式 · Agent 未连接" if client.is_demo else "共享后端模式")
+    st.caption("演示模式 · 智能助手未连接" if client.is_demo else "共享后端模式")
     if client.is_demo:
         st.caption("示例时间："+human(workspace["demo_now"]))
         with st.expander("演示数据与恢复"):
-            st.download_button("下载当前数据快照", json.dumps(workspace, ensure_ascii=False, indent=2), "unipulse-demo.json", "application/json")
+            st.download_button("下载当前数据快照", json.dumps(workspace, ensure_ascii=False, indent=2), "校园助手演示数据.json", "application/json")
             st.caption("下载仅用于留存，本版不支持快照导入。")
             agreed = st.checkbox("清除本次演示操作，恢复初始样例")
             if st.button("恢复示例", disabled=not agreed):
                 reset_demo()
     st.caption("学生项目 · 非学校官方服务")
 if client.is_demo:
-    st.caption("演示数据 · 尚未连接真实 Agent / 企微 / 自动排程；页面操作只影响本次演示会话。")
+    st.caption("演示数据 · 尚未连接真实智能助手 / 企微 / 自动排程；页面操作只影响本次演示会话。")
 else:
     st.caption("共享后端模式 · 仅展示后端返回的数据与结果")
     if os.getenv("UNIPULSE_LOCAL_TEST") == "1":
         st.warning("固定账号本机联调模式，不用于多用户部署。")
 if "flash" in st.session_state:
-    st.success(st.session_state.pop("flash"))
+    st.success(system_text(st.session_state.pop("flash")))
 
 
 def summary_card(label, title, detail):
@@ -145,7 +147,7 @@ def sources(source_ids):
         if n:
             st.text(n["text"])
             published = human(n["published_at"]) if n.get("published_at") else "未知"
-            st.caption(f"{n['channel']} · 接收 {human(n['received_at'])} · 发布 {published} · {n['status']}")
+            st.caption(f"{n['channel']} · 接收 {human(n['received_at'])} · 发布 {published} · {status_label(n['status'])}")
 
 
 def capacity_card(capacity):
@@ -154,17 +156,17 @@ def capacity_card(capacity):
         if capacity["unplaced_minutes"]:
             st.warning("仍有工作未排入。需要明确补充允许时段，或减少指定选做内容；当前未自动删减范围。")
         with st.expander("查看时间核对说明"):
-            st.caption(capacity["basis"])
+            st.caption(system_text(capacity["basis"]))
 
 
 def plan_result(compact=False):
     if not plans:
-        st.info("尚无已确认计划。连接 Agent 后将在这里展示结果。")
+        st.info("尚无已确认计划。连接智能助手后将在这里展示结果。")
     for p in plans:
         if plan_is_current(workspace, p):
-            st.write(f"**正式计划 v{p['version']} · 已确认**")
+            st.write(f"**正式计划 第{p['version']}版 · 已确认**")
         else:
-            st.warning(f"计划待调整 · 上次确认版本 v{p['version']}，尚无有效新版。")
+            st.warning(f"计划待调整 · 上次确认版本 第{p['version']}版，尚无有效新版。")
         plan_goal = goals_by_id.get(p.get("goal_id")) or goal
         if plan_goal:
             st.write(plan_goal["title"])
@@ -177,7 +179,7 @@ def plan_result(compact=False):
                 task = next(t for t in tasks if t["id"] == b["task_id"])
                 effective = plan_is_current(workspace, p) and b["status"] == "confirmed" and b["plan_version"] == p["version"] and task["status"] != "done" and task.get("included", True)
                 state = "已完成" if b["status"] == "completed" or task["status"] == "done" else "已移出" if b["status"] in {"retired", "cancelled"} or not task.get("included", True) else "已确认" if effective else "旧安排 · 待检查"
-                rows.append({"任务":task["title"],"开始":human(b["start_at"]),"结束":human(b["end_at"]),"版本":f"v{b['plan_version']}","状态":state})
+                rows.append({"任务":task["title"],"开始":human(b["start_at"]),"结束":human(b["end_at"]),"版本":f"第{b['plan_version']}版","状态":state})
             if rows:
                 st.table(rows)
 
@@ -189,7 +191,7 @@ def render_agenda(day):
     for r in rows:
         end = "—"+parse_time(r["end_at"]).astimezone(TZ).strftime("%H:%M") if r["end_at"] else ""
         css = " review" if r["kind"] == "旧学习块" else ""
-        st.markdown(f'<div class="agenda-card{css}"><div class="meta">{parse_time(r["start_at"]).astimezone(TZ):%H:%M}{end} · {escape(r["kind"])}</div><strong>{escape(r["title"])}</strong><p>{escape(r["detail"])} · {escape(r["status"])}</p></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="agenda-card{css}"><div class="meta">{parse_time(r["start_at"]).astimezone(TZ):%H:%M}{end} · {escape(r["kind"])}</div><strong>{escape(r["title"])}</strong><p>{escape(system_text(r["detail"]))} · {escape(r["status"])}</p></div>', unsafe_allow_html=True)
 
 
 def week_table():
@@ -219,9 +221,9 @@ def preview_card(action):
     with st.container(border=True):
         st.subheader("待确认调整 · 尚未生效")
         st.caption(f"编号 {action['id']} · 有效至 {human(action['expires_at'])}")
-        st.table([{"事项":c["label"],"原安排":c["before"],"调整后":c["after"]} for c in action["changes"]])
+        st.table([{"事项":system_text(c["label"]),"原安排":change_value(c["before"]),"调整后":change_value(c["after"])} for c in action["changes"]])
         if action["preserved"]:
-            st.write("保留："+"；".join(action["preserved"]))
+            st.write("保留："+"；".join(system_text(v) for v in action["preserved"]))
         capacity_card(action.get("capacity"))
         with st.expander("核对通知原文"):
             sources(action["source_notice_ids"])
@@ -235,13 +237,13 @@ def preview_card(action):
             run_action(client.confirm_action, action["id"], action.get("confirm_code"))
         if st.button("取消草稿", key="cancel_"+action["id"]):
             run_action(client.cancel_action, action["id"])
-        st.caption("当前演示仅确认考试事实及提醒队列变化，不代表 Agent 已生成新计划或消息已送达。" if client.is_demo else "仅提交本次预览。执行结果以刷新后的后端数据为准。")
+        st.caption("当前演示仅确认考试事实及提醒队列变化，不代表智能助手已生成新计划或消息已送达。" if client.is_demo else "仅提交本次预览。执行结果以刷新后的后端数据为准。")
 
 
 def task_card(task):
     with st.container(border=True):
         st.write(("✓ " if task["status"]=="done" else "□ ")+task["title"])
-        st.caption(f"{STATUS.get(task['status'],task['status'])} · {'必做' if task.get('required',True) else '选做'} · {'当前范围内' if task.get('included',True) else '已移出范围'}")
+        st.caption(f"{status_label(task['status'])} · {'必做' if task.get('required',True) else '选做'} · {'当前范围内' if task.get('included',True) else '已移出范围'}")
         st.write(f"剩余估时 {task['remaining_minutes']} 分钟 · 累计学习 {task['actual_minutes']} 分钟")
         if task.get("feedback"):
             st.write(task["feedback"])
@@ -291,7 +293,7 @@ def feedback_form():
                 run_action(client.record_time,task_id,actual,version)
     else:
         with st.form("progress_"+task_id):
-            status = st.selectbox("本次明确状态",["partial","doing","done","todo"],format_func=lambda k:STATUS[k])
+            status = st.selectbox("本次明确状态",["partial","doing","done","todo"],format_func=lambda k:status_label(k))
             remaining = st.number_input("明确剩余估时 / 分钟（完成时记为 0）",0,10080,current["remaining_minutes"],key="remain_"+task_id)
             actual = st.number_input("累计实际学习 / 分钟（替换原累计值）",0,10080,current["actual_minutes"],key="actual_"+task_id)
             feedback = st.text_area("进度说明",current.get("feedback",""))
@@ -304,15 +306,15 @@ def result_records():
         st.caption("默认只展示最终结果。这里保留实际页面操作或后端返回的摘要；不生成模型思考或虚构工具调用。")
         sources(list(notices))
         for item in reversed(workspace["activity"][-20:]):
-            st.write(item["name"]+" · "+item["detail"])
-            st.caption(item.get("kind","后端记录")+" · "+human(item["at"]))
+            st.write(system_text(item["name"]+" · "+item["detail"]))
+            st.caption(system_text(item.get("kind","后端记录"))+" · "+human(item["at"]))
         if not workspace["activity"]:
             st.caption("还没有处理记录。")
         for p in plans:
-            st.caption(p["summary"])
+            st.caption(system_text(p["summary"]))
         st.write("提醒结果")
         for r in workspace["reminders"]:
-            st.write(human(r["at"])+" · "+STATUS.get(r["status"],r["status"]))
+            st.write(human(r["at"])+" · "+status_label(r["status"]))
         st.caption("本地演示不会发消息，入队不表示已经送达。")
 
 
@@ -357,7 +359,7 @@ if page == "首页":
         if applied:
             with st.container(border=True):
                 st.subheader("最近修改结果")
-                st.table([{"事项":c["label"],"结果":c["after"]} for c in applied[-1]["changes"]])
+                st.table([{"事项":system_text(c["label"]),"结果":change_value(c["after"])} for c in applied[-1]["changes"]])
                 st.caption("已确认的修改结果；新学习计划是否有效以上方当前计划状态为准。")
     result_records()
 
@@ -398,11 +400,11 @@ elif page == "计划":
     with st.expander("编辑目标输入",expanded=False):
         edit_goal_form()
     with st.expander("网页备用对话",expanded=False):
-        st.caption("接入后复用同一 Agent；当前演示没有连接模型。" if client.is_demo else "此入口使用共享后端 Agent。")
+        st.caption("接入后复用同一智能助手；当前演示没有连接模型。" if client.is_demo else "此入口使用共享后端智能助手。")
         for m in st.session_state.get("chat_history",[]):
             with st.chat_message(m["role"]):
-                st.write(m["content"])
-        message = st.chat_input("给共享 Agent 发消息")
+                st.write(system_text(m["content"]) if m["role"] == "assistant" else m["content"])
+        message = st.chat_input("给共享智能助手发消息")
         if message:
             try:
                 result = client.chat(message)
@@ -412,7 +414,7 @@ elif page == "计划":
                 st.session_state["chat_history"] = (history+[{"role":"user","content":message},{"role":"assistant","content":result["reply"]}])[-20:]
                 st.rerun()
             except ClientError as exc:
-                st.error(str(exc))
+                st.error(system_text(exc))
     result_records()
 
 elif page == "任务":
@@ -434,4 +436,4 @@ elif page == "任务":
 st.divider()
 if st.button("刷新当前数据"):
     st.rerun()
-st.caption("UniPulse · 成员 C 桌面网页 · 学生项目，非学校官方服务")
+st.caption("校园智能助手 · 网页验收版 · 学生项目，非学校官方服务")

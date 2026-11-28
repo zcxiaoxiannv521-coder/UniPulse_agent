@@ -32,11 +32,11 @@ class PageTests(unittest.TestCase):
         self.assertEqual(len(self.app.chat_input), 0)
         text = '\n'.join(m.value for m in self.app.markdown)
         self.assertIn('<table class="week">',text)
-        self.assertIn('正式计划 v1',text)
+        self.assertIn('正式计划 第1版',text)
         self.assertIn('高等数学',text)
         records = next(e for e in self.app.expander if e.label=='通知证据与处理记录')
         self.assertFalse(records.proto.expanded)
-        self.assertTrue(any('尚未连接真实 Agent' in c.value for c in self.app.caption))
+        self.assertTrue(any('尚未连接真实智能助手' in c.value for c in self.app.caption))
 
     def test_multiple_goals_render_and_selectable(self):
         """多目标时侧栏出现目标选择器，页面不应崩溃。"""

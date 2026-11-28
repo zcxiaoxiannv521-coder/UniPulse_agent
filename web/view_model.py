@@ -22,7 +22,7 @@ def agenda_for_day(workspace, day):
             continue
         valid = plan_is_current(workspace, plan) and b["status"] == "confirmed" and b["plan_version"] == plan["version"]
         rows.append({"kind": "学习" if valid else "旧学习块", "title": task["title"], "start_at": b["start_at"], "end_at": b["end_at"],
-                     "detail": f"计划 v{b['plan_version']}", "status": "已确认" if valid else "待检查，不能视为有效计划"})
+                     "detail": f"计划 第{b['plan_version']}版", "status": "已确认" if valid else "待检查，不能视为有效计划"})
     return sorted([r for r in rows if parse_time(r["start_at"]).astimezone(TZ).date() == day], key=lambda r: parse_time(r["start_at"]))
 
 
