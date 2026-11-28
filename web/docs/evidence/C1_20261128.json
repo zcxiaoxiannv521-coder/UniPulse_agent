@@ -1,0 +1,64 @@
+{
+  "courses": [
+    {
+      "total": 4
+    }
+  ],
+  "exam": [
+    {
+      "exam_date": "2026-12-02",
+      "start_time": "14:00",
+      "version": 2
+    }
+  ],
+  "plans": [
+    {
+      "version": 1,
+      "status": "superseded"
+    },
+    {
+      "version": 2,
+      "status": "confirmed"
+    }
+  ],
+  "previews": [
+    {
+      "status": "cancelled",
+      "total": 1
+    },
+    {
+      "status": "confirmed",
+      "total": 1
+    }
+  ],
+  "tasks": [
+    {
+      "title": "复习第三章",
+      "status": "done",
+      "remaining_minutes": 0,
+      "actual_minutes": 30
+    },
+    {
+      "title": "复习第四章",
+      "status": "todo",
+      "remaining_minutes": 90,
+      "actual_minutes": 0
+    },
+    {
+      "title": "模拟练习",
+      "status": "todo",
+      "remaining_minutes": 80,
+      "actual_minutes": 0
+    }
+  ],
+  "notifications": [
+    {
+      "total": 2
+    }
+  ],
+  "logs": [
+    {
+      "total": 3
+    }
+  ]
+}

@@ -48,7 +48,9 @@ def run_action(fn, *args):
         st.session_state["flash"] = system_text(result.get("message", "操作已完成。"))
         st.rerun()
     except ClientError as exc:
-        st.error(system_text(exc))
+        # 表单所在折叠区可能在刷新后收起，失败提示统一放到页面上方。
+        st.session_state["flash_error"] = system_text(exc)
+        st.rerun()
 
 
 def reset_demo():
@@ -133,6 +135,8 @@ else:
         st.warning("固定账号本机联调模式，不用于多用户部署。")
 if "flash" in st.session_state:
     st.success(system_text(st.session_state.pop("flash")))
+if "flash_error" in st.session_state:
+    st.error(system_text(st.session_state.pop("flash_error")))
 
 
 def summary_card(label, title, detail):
@@ -382,7 +386,7 @@ elif page == "课表":
                 end = st.time_input("结束时间",time(9,35))
                 if st.form_submit_button("保存课程",type="primary"):
                     run_action(client.add_class,{"course":course,"location":location,"start_at":datetime.combine(day,start,TZ).isoformat(),"end_at":datetime.combine(day,end,TZ).isoformat()},version)
-        st.caption("新增课程后，关联计划会标为待检查；本地模式不会自动重排。")
+        st.caption("新增课程后，关联计划会标为待检查；本地模式不会自动重排。" if client.is_demo else "课程通过后台保存；计划是否需要调整，以后台返回状态为准。")
     result_records()
 
 elif page == "计划":

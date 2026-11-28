@@ -5,7 +5,7 @@
     'Skip to main content':'跳转到主要内容', 'Sidebar':'侧栏',
     'Collapse sidebar':'收起侧栏','Expand sidebar':'展开侧栏',
     'Link to heading':'跳转到标题','Main menu':'主菜单','Deploy':'发布',
-    'Open':'展开','Close':'关闭','Clear':'清除','Search':'搜索',
+    'Open':'展开','Close':'关闭','Clear':'清除','Search':'搜索','Dismiss':'关闭菜单',
     'Choose date':'选择日期','Previous month':'上个月','Next month':'下个月',
     'Previous year':'上一年','Next year':'下一年','Today':'今天',
     'Start date':'开始日期','End date':'结束日期',
@@ -34,6 +34,8 @@
     for (const prefix of ['Choose date','year','month','day']) {
       if (trimmed.startsWith(prefix+', ')) return value.replace(prefix,labels[prefix]);
     }
+    if (/^\d+ options available\./.test(trimmed)) return value.replace(/(\d+) options available\./, '有 $1 个可选项。').replace(/, selected\b/g,'，已选择');
+    if (/, selected$/.test(trimmed)) return value.replace(/, selected$/, '，已选择');
     return value;
   };
   const apply=()=>{

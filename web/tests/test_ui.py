@@ -183,6 +183,22 @@ class PageTests(unittest.TestCase):
         self.assertTrue(any('已有课程' in e.value for e in self.app.error))
         self.assertEqual(len(self.app.session_state['demo_workspace']['classes']),5)
 
+    def test_failed_course_can_be_corrected_without_stale_error(self):
+        from datetime import time
+        self.page('课表')
+        before = deepcopy(self.app.session_state['demo_workspace'])
+        next(w for w in self.app.text_input if w.label=='课程名称').set_value('验收修正课程')
+        self.click('保存课程')
+        self.assertTrue(self.app.error)
+        self.assertEqual(before, self.app.session_state['demo_workspace'])
+        next(w for w in self.app.time_input if w.label=='开始时间').set_value(time(17))
+        next(w for w in self.app.time_input if w.label=='结束时间').set_value(time(18))
+        self.click('保存课程')
+        self.assertFalse(self.app.error)
+        self.assertTrue(self.app.success)
+        self.page('首页')
+        self.assertIn('验收修正课程','\n'.join(m.value for m in self.app.markdown))
+
     def test_task_filter_changes_only_view(self):
         self.page('任务')
         before = deepcopy(self.app.session_state['demo_workspace'])
